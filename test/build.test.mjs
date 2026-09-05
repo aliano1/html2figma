@@ -32,5 +32,9 @@ if (lbl) { const btn = (function up(n) { return n.name.includes('flexbtn') ? n :
 check(root.findAll(n => n.type === 'RECTANGLE' && n.name === 'image' && n.fills[0] && n.fills[0].type === 'IMAGE').length === 1, 'inlined image became an IMAGE fill');
 check(!texts.some(t => t.characters === 'Hidden content that should NOT be captured.'), 'closed <details> content excluded');
 check(byChars('E-mail').length === 1, 'input placeholder captured');
+const sticky = byChars('Add to cart — sticky')[0];
+if (sticky) { const [, sy] = abs(sticky); check(sy > root.height - 80, `bottom-fixed bar moved to page bottom (y=${sy.toFixed(0)} of ${root.height.toFixed(0)})`); } else check(false, 'sticky bar captured');
+const topbar = root.findAll(n => n.type === 'FRAME' && n.name.includes('(fixed)') && !n.name.includes('bottom'));
+check(topbar.length === 1 && topbar[0].y < 5, 'top-fixed bar stays at the top');
 console.log(fails ? `\n${fails} check(s) failed` : '\nall checks passed');
 process.exit(fails ? 1 : 0);

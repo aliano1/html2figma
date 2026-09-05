@@ -97,7 +97,8 @@ function nameOf(n: CapNode) {
   if (n.img) return n.t === 'video' ? 'video frame' : (n as any).glyph ? 'glyph (raster)' : (n as any).pseudo ? 'pseudo image' : 'image';
   if (n.t === 'svg') return 'icon';
   const nm = n.nm || n.id || (n.cl || '').split(' ')[0];
-  return nm && nm !== n.t ? `${n.t} · ${nm}`.slice(0, 60) : n.t;
+  const base = nm && nm !== n.t ? `${n.t} · ${nm}`.slice(0, 60) : n.t;
+  return n.s && n.s.pos === 'fixed' ? `${base} (fixed${n.s.fixedBottom ? ', bottom' : ''})` : base;
 }
 function inlineRuns(n: CapNode): CapNode[] | null {
   const out: CapNode[] = [];

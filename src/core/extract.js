@@ -84,11 +84,23 @@ export function extract(options = {}) {
     } catch (_) { return el.poster || null; }  // cross-origin video taints the canvas
   }
 
-  function walk(el) {
+  // position:fixed elements anchored to the bottom of the viewport (sticky add-to-cart bars, cookie
+  // strips, chat launchers) are moved to the bottom of the page frame — where they'd sit once you've
+  // scrolled to the end. Top-anchored ones (sticky headers) stay put. The offset is inherited by the subtree.
+  const pageH = document.documentElement.scrollHeight, vpH = window.innerHeight;
+  function fixedInfo(el, cs) {
+    if (cs.position !== 'fixed') return null;
+    const b = el.getBoundingClientRect();
+    const bottom = (b.top + b.height / 2) > vpH / 2;
+    return { bottom, dy: bottom ? Math.max(0, pageH - vpH) : 0 };
+  }
+
+  function walk(el, dy = 0) {
     if (SKIP.has(el.tagName)) return null;
     const cs = getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) return null;
-    const r = rect(el);
+    const fi = fixedInfo(el, cs); if (fi && fi.dy) dy = fi.dy;
+    const r = rect(el); r[1] = rnd(r[1] + dy);
     if (r[2] <= 0 && r[3] <= 0 && cs.overflow !== 'visible') return null;
     if (r[1] + r[3] < 0) return null;
 
@@ -115,7 +127,7 @@ export function extract(options = {}) {
     if (parseFloat(cs.opacity) < 1) s.op = parseFloat(cs.opacity);
     if (cs.boxShadow && cs.boxShadow !== 'none') s.sh = cs.boxShadow;
     if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') s.ov = 'hidden';
-    if (cs.position === 'fixed' || cs.position === 'sticky') s.pos = cs.position;
+    if (cs.position === 'fixed' || cs.position === 'sticky') { s.pos = cs.position; if (fi && fi.bottom) s.fixedBottom = true; }
     if (cs.display.includes('flex')) {
       s.fx = { d: cs.flexDirection, g: [parseFloat(cs.rowGap) || 0, parseFloat(cs.columnGap) || 0], j: cs.justifyContent, a: cs.alignItems, w: cs.flexWrap,
                p: [cs.paddingTop, cs.paddingRight, cs.paddingBottom, cs.paddingLeft].map(parseFloat) };
@@ -171,6 +183,7 @@ export function extract(options = {}) {
       if (ch.nodeType === 3) {
         const run = textRun(ch, cs);
         if (run) {
+          run.r[1] = rnd(run.r[1] + dy);
           if (opts.markForRaster && (PUA.test(run.txt) || ICON_FONT.test(cs.fontFamily)) && el.childElementCount === 0) {
             markShot(el, n); n.glyph = true; continue;   // host element becomes an image; drop the run
           }
@@ -178,13 +191,13 @@ export function extract(options = {}) {
         }
       } else if (ch.nodeType === 1) {
         if (closedDetails && ch.tagName !== 'SUMMARY') continue;
-        const k = walk(ch); if (k) kids.push(k);
+        const k = walk(ch, dy); if (k) kids.push(k);
       }
     }
     // shadow DOM (web components)
     if (el.shadowRoot) {
       for (const ch of el.shadowRoot.childNodes) {
-        if (ch.nodeType === 1) { const k = walk(ch); if (k) kids.push(k); }
+        if (ch.nodeType === 1) { const k = walk(ch, dy); if (k) kids.push(k); }
       }
     }
     // form controls render their value/placeholder without text nodes
@@ -214,6 +227,7 @@ export function extract(options = {}) {
   }
 
   const tree = walk(opts.root);
+  if (tree && opts.root === document.body) tree.r[3] = Math.max(tree.r[3], pageH, vpH);
   return {
     v: 1,
     url: location.href,
