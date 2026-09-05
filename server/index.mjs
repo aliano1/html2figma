@@ -38,7 +38,8 @@ if (!API_KEY && process.env.H2F_ALLOW_ANON !== '1') {
 // ---------- browser (one per process, contexts per request) ----------
 let browserP = null;
 let browserName = '';
-const ARGS = ['--disable-dev-shm-usage', '--no-sandbox', '--disable-gpu', '--autoplay-policy=no-user-gesture-required', '--mute-audio'];
+const ARGS = ['--disable-dev-shm-usage', '--no-sandbox', '--disable-gpu', '--autoplay-policy=no-user-gesture-required', '--mute-audio',
+  '--disable-extensions', '--disable-background-networking', '--renderer-process-limit=2', '--js-flags=--max-old-space-size=512'];
 function browser() {
   if (!browserP) {
     browserP = (async () => {
@@ -88,16 +89,9 @@ async function captureViewport(b, opts, width) {
       return c;
     }, { hide: [...DEFAULT_HIDE, ...(opts.hideSelectors || [])] });
 
-    // inline what the page can fetch itself (same-origin / CORS)
-    await page.evaluate(async () => { window.__cap = null; });
-    const inlined = await page.evaluate(async (capJson) => {
-      const c = JSON.parse(capJson);
-      await window.__h2f.inlineImages(c, { maxDim: 1600 });
-      return JSON.stringify(c);
-    }, JSON.stringify(cap));
-    const capture = JSON.parse(inlined);
-
-    // server-side fetch for anything still a URL (CORS-blocked CDNs) — uses the page's cookies
+    // Fetch images server-side with the page's cookies. (Doing it in-page via canvas, as the
+    // bookmarklet does, decodes every image at full size inside the renderer — too heavy for a 1 GB box.)
+    const capture = cap;
     await fetchRemaining(ctx, capture);
 
     // rasterise the marked elements
@@ -109,11 +103,22 @@ async function captureViewport(b, opts, width) {
   }
 }
 
+// CDN resize hints (Shopify `?width=72`, `_64x64.`, Cloudinary `w_72`): ask for 2x the displayed size so
+// thumbnails stay crisp when zoomed in Figma. Falls back to the original URL if the CDN refuses.
+function upscaleUrl(url, r) {
+  const want = Math.min(2048, Math.ceil((r ? r[2] : 0) * 2));
+  if (!want) return url;
+  return url
+    .replace(/([?&])width=(\d+)/, (m, p, w) => `${p}width=${Math.max(+w, want)}`)
+    .replace(/_(\d+)x(\d*)(\.[a-z]+)(\?|$)/i, (m, w, h, ext, q) => +w >= want ? m : `_${want}x${ext}${q}`)
+    .replace(/\/w_(\d+)(,|\/)/, (m, w, sep) => +w >= want ? m : `/w_${want}${sep}`);
+}
+
 async function fetchRemaining(ctx, capture) {
   const holders = [];
   (function walk(n) {
-    if (n.img && /^https?:/.test(n.img)) holders.push([n, 'img']);
-    if (n.s && n.s.bgi && /^https?:/.test(n.s.bgi)) holders.push([n.s, 'bgi']);
+    if (n.img && /^https?:/.test(n.img)) { n.img = upscaleUrl(n.img, n.r); holders.push([n, 'img']); }
+    if (n.s && n.s.bgi && /^https?:/.test(n.s.bgi)) { n.s.bgi = upscaleUrl(n.s.bgi, n.r); holders.push([n.s, 'bgi']); }
     (n.c || []).forEach(walk);
   })(capture.tree);
   const cache = new Map();
@@ -121,7 +126,8 @@ async function fetchRemaining(ctx, capture) {
     const url = h[k];
     if (!cache.has(url)) cache.set(url, (async () => {
       try {
-        const res = await ctx.request.get(url, { timeout: 15000 });
+        let res = await ctx.request.get(url, { timeout: 15000 });
+        if (!res.ok() && /width=|_\d+x/.test(url)) res = await ctx.request.get(url.replace(/([?&])width=\d+/, '$1width=800'), { timeout: 15000 });
         if (!res.ok()) return null;
         const type = res.headers()['content-type'] || 'image/png';
         const buf = await res.body();
@@ -204,7 +210,10 @@ const server = http.createServer(async (req, res) => {
     json(res, 200, { url, title: captures[0].capture.title, region: REGION, ms: Date.now() - t0, captures });
   } catch (e) {
     console.error('capture failed', url, e);
-    json(res, 500, { error: String(e.message || e).slice(0, 300) });
+    const msg = String(e.message || e);
+    json(res, 500, { error: /Target crashed|Target closed|out of memory/i.test(msg)
+      ? 'Browser tab crashed (usually out of memory). Give the service more RAM (Railway: Hobby plan; Fly: memory = "2gb") or capture one width at a time.'
+      : msg.slice(0, 300) });
   } finally { inflight--; }
 });
 

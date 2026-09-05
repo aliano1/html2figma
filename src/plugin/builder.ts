@@ -302,7 +302,7 @@ export async function build(cap: Capture, opts: BuildOptions = {}): Promise<Fram
       const f = figma.createFrame();
       const fills: Paint[] = [];
       const bg = parseColor(s.bg); if (bg && bg.a > 0) fills.push(solid(bg));
-      if (s.grad) { const g = parseGradient(s.grad); if (g) fills.push(g); }
+      if (s.grad && !s.gradDeco) { const g = parseGradient(s.grad); if (g) fills.push(g); }
       if (s.bgi) { const hash = await images.hash(s.bgi); if (hash) fills.push({ type: 'IMAGE', imageHash: hash, scaleMode: 'FILL' }); }
       f.fills = fills;
       f.clipsContent = s.ov === 'hidden';

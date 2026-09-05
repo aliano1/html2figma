@@ -98,7 +98,13 @@ export function extract(options = {}) {
     if (cs.backgroundImage && cs.backgroundImage !== 'none') {
       const m = cs.backgroundImage.match(/url\("?([^")]+)"?\)/);
       if (m) s.bgi = m[1];
-      else if (cs.backgroundImage.includes('gradient')) s.grad = cs.backgroundImage;
+      else if (cs.backgroundImage.includes('gradient')) {
+        s.grad = cs.backgroundImage;
+        // Multi-layer gradients + a non-trivial background-size are almost always scroll-edge fades
+        // (e.g. <scroll-shadow>), sized/positioned by JS. Flag them so the builder can skip them.
+        const layers = cs.backgroundImage.split(/\)\s*,\s*(?=(?:linear|radial|conic|repeating)-)/).length;
+        if (layers > 1 || !/^(auto|cover|100% 100%|auto auto)$/.test(cs.backgroundSize)) s.gradDeco = true;
+      }
     }
     const bw = [cs.borderTopWidth, cs.borderRightWidth, cs.borderBottomWidth, cs.borderLeftWidth].map(parseFloat);
     if (bw.some(w => w > 0) && cs.borderTopStyle !== 'none' && cs.borderTopStyle !== 'hidden') {

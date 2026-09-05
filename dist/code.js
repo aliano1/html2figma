@@ -351,7 +351,7 @@
         const fills = [];
         const bg = parseColor(s.bg);
         if (bg && bg.a > 0) fills.push(solid(bg));
-        if (s.grad) {
+        if (s.grad && !s.gradDeco) {
           const g = parseGradient(s.grad);
           if (g) fills.push(g);
         }
