@@ -1,0 +1,13 @@
+{
+  "name": "html2figma",
+  "id": "html2figma-dev",
+  "api": "1.0.0",
+  "main": "dist/code.js",
+  "ui": "dist/ui.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["*"],
+    "reasoning": "Fetches page images that could not be inlined by the bookmarklet (CORS-restricted CDNs)."
+  },
+  "documentAccess": "dynamic-page"
+}

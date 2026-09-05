@@ -1,0 +1,124 @@
+<style>
+  body { font: 12px/1.5 Inter, system-ui, sans-serif; margin: 0; padding: 12px 14px; color: var(--figma-color-text); background: var(--figma-color-bg); }
+  h1 { font-size: 13px; margin: 0 0 8px; display: flex; align-items: center; justify-content: space-between; }
+  p { margin: 0 0 8px; color: var(--figma-color-text-secondary); }
+  .tabs { display: flex; gap: 4px; margin-bottom: 10px; border-bottom: 1px solid var(--figma-color-border); }
+  .tabs button { background: none; color: var(--figma-color-text-secondary); border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 10px; font-weight: 600; }
+  .tabs button.active { color: var(--figma-color-text); border-bottom-color: var(--figma-color-bg-brand); }
+  textarea { width: 100%; box-sizing: border-box; height: 100px; font: 11px/1.4 ui-monospace, monospace; border: 1px solid var(--figma-color-border); border-radius: 6px; padding: 8px; background: var(--figma-color-bg-secondary); color: inherit; resize: vertical; }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .row > span:first-child { width: 88px; flex: none; color: var(--figma-color-text-secondary); }
+  input[type=text], input[type=password], select { flex: 1; min-width: 0; border: 1px solid var(--figma-color-border); border-radius: 6px; padding: 6px 8px; background: var(--figma-color-bg-secondary); color: inherit; font: inherit; }
+  button { border: 0; border-radius: 6px; padding: 8px 12px; font: inherit; font-weight: 600; cursor: pointer; background: var(--figma-color-bg-brand); color: var(--figma-color-text-onbrand); }
+  button.secondary { background: var(--figma-color-bg-secondary); color: var(--figma-color-text); }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { margin-top: 10px; min-height: 18px; }
+  progress { width: 100%; height: 6px; }
+  label.file input { display: none; }
+  .widths label { margin-right: 10px; white-space: nowrap; }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; color: var(--figma-color-text-secondary); }
+  [hidden] { display: none !important; }
+</style>
+
+<h1>html2figma <button id="close" class="secondary" style="padding:2px 8px">✕</button></h1>
+<div class="tabs">
+  <button data-tab="url" class="active">From URL</button>
+  <button data-tab="paste">Paste capture</button>
+</div>
+
+<section id="tab-url">
+  <p>The capture server renders the page in a real browser (US/EU region), grabs video frames and icon glyphs, and returns editable layers.</p>
+  <div class="row"><span>Page URL</span><input id="url" type="text" placeholder="https://example.com/products/…"></div>
+  <div class="row"><span>Widths</span><div class="widths">
+    <label><input type="checkbox" class="w" value="1920" checked> 1920</label>
+    <label><input type="checkbox" class="w" value="1440"> 1440</label>
+    <label><input type="checkbox" class="w" value="1024"> 1024</label>
+    <label><input type="checkbox" class="w" value="390" checked> 390</label>
+    <input id="wcustom" type="text" placeholder="custom" style="width:56px;flex:none">
+  </div></div>
+  <div class="row"><span>Region</span><select id="region">
+    <option value="">Server default</option>
+    <option value="iad">US East (iad)</option><option value="sjc">US West (sjc)</option>
+    <option value="ams">Europe (ams)</option><option value="lhr">UK (lhr)</option>
+    <option value="sin">Singapore (sin)</option><option value="syd">Australia (syd)</option>
+  </select></div>
+  <details><summary>Server settings</summary>
+    <div class="row"><span>Server URL</span><input id="server" type="text" placeholder="https://your-app.fly.dev"></div>
+    <div class="row"><span>API key</span><input id="apikey" type="password" placeholder="H2F_API_KEY"></div>
+  </details>
+  <div class="row"><button id="capture">Capture &amp; build</button></div>
+</section>
+
+<section id="tab-paste" hidden>
+  <p>Run the bookmarklet on a page, then paste the JSON or open the downloaded file.</p>
+  <textarea id="json" placeholder='{"v":1,"url":"…","tree":{…}}'></textarea>
+  <div class="row">
+    <label class="file"><button class="secondary" type="button" onclick="this.parentNode.querySelector('input').click()">Open .json file…</button><input id="file" type="file" accept=".json,application/json"></label>
+    <span id="fileName" style="color:var(--figma-color-text-secondary)"></span>
+  </div>
+  <div class="row"><button id="build">Build in Figma</button></div>
+</section>
+
+<details><summary>Font options</summary>
+  <div class="row"><span>Fallback font</span><input id="fallback" type="text" value="Inter"></div>
+  <div class="row"><span>Font map</span><input id="fontmap" type="text" placeholder="Komet=Inter, Helvetica Neue=Helvetica"></div>
+</details>
+
+<div id="status"></div>
+<progress id="bar" value="0" max="1" hidden></progress>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const post = m => parent.postMessage({ pluginMessage: m }, '*');
+  let capture = null;
+
+  // tabs
+  document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+    document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('active', x === b));
+    $('tab-url').hidden = b.dataset.tab !== 'url'; $('tab-paste').hidden = b.dataset.tab !== 'paste';
+  });
+
+  // settings persistence (server, key, fonts)
+  post({ type: 'init' });
+  const settingIds = ['server', 'apikey', 'fallback', 'fontmap', 'region'];
+  const saveSettings = () => post({ type: 'saveSettings', settings: Object.fromEntries(settingIds.map(id => [id, $(id).value])) });
+  settingIds.forEach(id => $(id).addEventListener('change', saveSettings));
+
+  function fontOpts() {
+    const fontMap = {};
+    $('fontmap').value.split(',').map(s => s.trim()).filter(Boolean).forEach(pair => { const [a, b] = pair.split('=').map(s => s.trim()); if (a && b) fontMap[a] = b; });
+    return { fallbackFont: $('fallback').value.trim() || 'Inter', fontMap };
+  }
+  function busy(on, text) { $('capture').disabled = on; $('build').disabled = on; $('bar').hidden = !on; if (on) $('bar').value = 0; if (text !== undefined) $('status').textContent = text; }
+
+  $('file').onchange = async e => { const f = e.target.files[0]; if (!f) return; capture = await f.text(); $('fileName').textContent = f.name + ' (' + Math.round(f.size / 1024) + ' KB)'; $('json').value = ''; };
+  $('json').oninput = () => { capture = null; $('fileName').textContent = ''; };
+  $('build').onclick = () => {
+    const raw = capture || $('json').value.trim();
+    if (!raw) { $('status').textContent = 'Paste a capture or open a file first.'; return; }
+    busy(true, 'Building…');
+    post({ type: 'build', capture: raw, ...fontOpts() });
+  };
+  $('capture').onclick = () => {
+    const url = $('url').value.trim();
+    if (!/^https?:\/\//.test(url)) { $('status').textContent = 'Enter a full URL starting with https://'; return; }
+    const widths = [...document.querySelectorAll('.w:checked')].map(c => +c.value);
+    const custom = parseInt($('wcustom').value, 10); if (custom >= 320) widths.push(custom);
+    if (!widths.length) { $('status').textContent = 'Pick at least one width.'; return; }
+    if (!$('server').value.trim()) { document.querySelector('#tab-url details').open = true; $('status').textContent = 'Set the capture server URL (see DEPLOY.md).'; return; }
+    saveSettings();
+    busy(true, 'Contacting server…');
+    post({ type: 'captureUrl', server: $('server').value.trim(), apiKey: $('apikey').value.trim(), url, widths, region: $('region').value, ...fontOpts() });
+  };
+  $('close').onclick = () => post({ type: 'close' });
+
+  window.onmessage = e => {
+    const m = e.data.pluginMessage; if (!m) return;
+    if (m.type === 'settings') { for (const id of settingIds) if (m.settings[id] !== undefined) $(id).value = m.settings[id]; }
+    if (m.type === 'status') $('status').textContent = m.text;
+    if (m.type === 'progress') { $('bar').value = m.done / m.total; $('status').textContent = `Building ${m.count > 1 ? (m.index + 1) + '/' + m.count + ' ' : ''}… ${m.done}/${m.total} layers`; }
+    if (m.type === 'done') { $('bar').value = 1; busy(false, `Done in ${m.seconds}s → ${m.name}`); $('bar').hidden = false; }
+    if (m.type === 'error') busy(false, 'Error: ' + m.message);
+  };
+</script>

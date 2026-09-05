@@ -1,0 +1,3 @@
+node_modules/
+test/capture.json
+test/figma-test.js
