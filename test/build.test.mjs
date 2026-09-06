@@ -27,6 +27,11 @@ const chev = byChars('›');
 check(chev.length === 1, `chevron ::after present as text, got ${chev.length}`);
 const spec = byChars('See all specs')[0];
 if (chev[0] && spec) { const [cx, cy] = abs(chev[0]), [sx, sy] = abs(spec); check(cx >= sx + spec.width - 1 && Math.abs(cy - sy) < 6, `chevron sits right after "See all specs" (chev x=${cx.toFixed(1)}, text right=${(sx + spec.width).toFixed(1)})`); }
+const inst = byChars('interest-free');
+check(inst.length === 1 && inst[0].characters === '4 interest-free installments, or from $85.29/mo with shop', `same-line bold/plain runs merged into one node with spacing kept: "${inst[0] && inst[0].characters}"`);
+check(inst[0] && inst[0].textAutoResize === 'WIDTH_AND_HEIGHT' && inst[0]._ranges.some(x => x[0] === 'font' && inst[0].characters.slice(x[1], x[2]) === '$85.29'), 'merged single-line node stays single-line and keeps the bold range on the price');
+check(!texts.some(t => t.characters === '$85.29' || t.characters === '/mo with'), 'no stray separate nodes for the price / "/mo with"');
+if (inst[0]) { const icon = inst[0].parent.children.find(c => c !== inst[0] && c.name === 'icon'); check(!!icon && icon.x >= inst[0].x + inst[0].width - 1, `trailing inline svg survives next to the merged line (icon x=${icon && icon.x.toFixed(1)}, text right=${(inst[0].x + inst[0].width).toFixed(1)})`); }
 const lbl = byChars('Add to cart')[0];
 if (lbl) { const btn = (function up(n) { return n.name.includes('flexbtn') ? n : n.parent && n.parent.type !== 'PAGE' ? up(n.parent) : null; })(lbl); const [lx] = abs(lbl), [bx] = abs(btn); const gapL = lx - bx, gapR = bx + btn.width - (lx + lbl.width); check(Math.abs(gapL - gapR) < 2, `flex-centred label stays centred (gaps ${gapL.toFixed(1)} / ${gapR.toFixed(1)})`); }
 check(root.findAll(n => n.type === 'RECTANGLE' && n.name === 'image' && n.fills[0] && n.fills[0].type === 'IMAGE').length === 1, 'inlined image became an IMAGE fill');

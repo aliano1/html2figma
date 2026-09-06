@@ -92,6 +92,21 @@
     const [ax, ay, aw, ah] = a.r, [bx, by, bw, bh] = b.r;
     return ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
   };
+  var sameLine = (a, b) => {
+    const [, ay, , ah] = a.r, [, by, , bh] = b.r;
+    const ov = Math.min(ay + ah, by + bh) - Math.max(ay, by);
+    return ov >= 0.5 * Math.min(ah, bh);
+  };
+  var adjacentChain = (runs) => {
+    if (runs.some((k) => (k.lines || 1) > 1 || k.pseudo || PUA_RE.test(k.txt || ""))) return false;
+    for (let i = 1; i < runs.length; i++) {
+      const a = runs[i - 1], b = runs[i];
+      if (!sameLine(a, b)) return false;
+      const gap = b.r[0] - (a.r[0] + a.r[2]);
+      if (gap < -2 || gap > 1.5 * (b.f?.fs || 14)) return false;
+    }
+    return true;
+  };
   var FontResolver = class {
     constructor(fallback, map) {
       this.fallback = fallback;
@@ -213,10 +228,16 @@
       t.fontName = primary;
       let txt = "";
       const segs = [];
-      for (const k of runs) {
+      for (let i = 0; i < runs.length; i++) {
+        const k = runs[i];
         let piece = k.txt || "";
         if (!txt && runs.length > 1) piece = piece.replace(/^\s+/, "");
-        else if (!txt.endsWith(" ") && !piece.startsWith(" ")) piece = " " + piece;
+        else if (i > 0 && !txt.endsWith(" ") && !piece.startsWith(" ")) {
+          const p = runs[i - 1];
+          const gap = k.r[0] - (p.r[0] + p.r[2]);
+          const touching = sameLine(p, k) && gap < 0.2 * (k.f?.fs || 14);
+          if (!touching) piece = " " + piece;
+        }
         const s = txt.length;
         txt += piece;
         segs.push({ s, e: txt.length, f: k.f });
@@ -247,7 +268,7 @@
           if ((g.f.td || "").includes("underline")) t.setRangeTextDecoration(g.s, g.e, "UNDERLINE");
         }
       }
-      const multiline = runs.length > 1 || (runs[0].lines || 1) > 1;
+      const multiline = runs.length > 1 ? !adjacentChain(runs) : (runs[0].lines || 1) > 1;
       if (multiline) {
         t.textAutoResize = "HEIGHT";
         t.resize(Math.max(box[2] * 1.04 + 4, 4), Math.max(box[3], 1));
@@ -262,15 +283,37 @@
       let node = null;
       let recurse = true;
       const runs = n.t !== "#text" && !n.img && n.t !== "svg" ? inlineRuns(n) : null;
-      const merged = runs && runs.length >= 2 && (runs.some((k) => (k.lines || 1) > 1) || runs.some((a, i) => runs.slice(i + 1).some((b) => overlaps(a, b))));
-      if (merged) {
-        const r0 = runs[0];
+      const merged = runs && runs.length >= 2 && (runs.some((k) => (k.lines || 1) > 1) || runs.some((a, i) => runs.slice(i + 1).some((b) => overlaps(a, b))) || adjacentChain(runs));
+      const anchorSingle = (t, rx, rw, pr) => {
+        const gapL = rx - pr[0], gapR = pr[0] + pr[2] - (rx + rw);
+        let anchor = t.textAlignHorizontal === "CENTER" ? "CENTER" : t.textAlignHorizontal === "RIGHT" ? "RIGHT" : "LEFT";
+        if (anchor === "LEFT" && gapL > 1 && Math.abs(gapL - gapR) <= Math.max(2, 0.02 * pr[2])) anchor = "CENTER";
+        else if (anchor === "LEFT" && gapR < 1 && gapL > 4) anchor = "RIGHT";
+        if (anchor === "CENTER") t.x = rx - px0 + (rw - t.width) / 2;
+        else if (anchor === "RIGHT") t.x = rx - px0 + rw - t.width;
+      };
+      const buildMerged = async (rs, into, ox, oy, block, bottom) => {
+        const r0 = rs[0];
         const lh = px(r0.f.lh);
         const top = r0.r[1] - (lh ? (lh - r0.r[3]) / 2 : 0);
-        node = await makeText(runs, [x, top, w, y + h - top], nameOf(runs[0]));
-        parent.appendChild(node);
-        node.x = x - px0 - (padOf.get(node) || 0);
-        node.y = top - py0;
+        const rx = Math.min(...rs.map((k) => k.r[0])), rw = Math.max(...rs.map((k) => k.r[0] + k.r[2])) - rx;
+        const t = await makeText(rs, [rx, top, rw, bottom - top], nameOf(r0));
+        into.appendChild(t);
+        t.x = rx - ox - (padOf.get(t) || 0);
+        t.y = top - oy;
+        if (t.textAutoResize === "WIDTH_AND_HEIGHT") {
+          const gapL = rx - block[0], gapR = block[0] + block[2] - (rx + rw);
+          let anchor = t.textAlignHorizontal === "CENTER" ? "CENTER" : t.textAlignHorizontal === "RIGHT" ? "RIGHT" : "LEFT";
+          if (anchor === "LEFT" && gapL > 1 && Math.abs(gapL - gapR) <= Math.max(2, 0.02 * block[2])) anchor = "CENTER";
+          else if (anchor === "LEFT" && gapR < 1 && gapL > 4) anchor = "RIGHT";
+          if (anchor === "CENTER") t.x = rx - ox + (rw - t.width) / 2;
+          else if (anchor === "RIGHT") t.x = rx - ox + rw - t.width;
+          t.y = top - oy + (Math.max(lh || 0, r0.r[3]) - t.height) / 2;
+        }
+        return t;
+      };
+      if (merged) {
+        node = await buildMerged(runs, parent, px0, py0, n.r, y + h);
         recurse = false;
       } else if (n.t === "#text" && PUA_RE.test(n.txt || "")) {
         const glyphs = (n.txt || "").replace(/\s/g, "").length || 1;
@@ -297,13 +340,7 @@
         t.x = x - px0;
         t.y = top - py0;
         if (t.textAutoResize === "WIDTH_AND_HEIGHT") {
-          const pr = parentRect;
-          const gapL = x - pr[0], gapR = pr[0] + pr[2] - (x + w);
-          let anchor = t.textAlignHorizontal === "CENTER" ? "CENTER" : t.textAlignHorizontal === "RIGHT" ? "RIGHT" : "LEFT";
-          if (anchor === "LEFT" && gapL > 1 && Math.abs(gapL - gapR) <= Math.max(2, 0.02 * pr[2])) anchor = "CENTER";
-          else if (anchor === "LEFT" && gapR < 1 && gapL > 4) anchor = "RIGHT";
-          if (anchor === "CENTER") t.x = x - px0 + (w - t.width) / 2;
-          else if (anchor === "RIGHT") t.x = x - px0 + w - t.width;
+          anchorSingle(t, x, w, parentRect);
           t.y = top - py0 + (Math.max(lh || 0, h) - t.height) / 2;
           if (n.pseudo === "::after") {
             const sib = parent.children;
@@ -379,8 +416,33 @@
       tick();
       if (recurse && node && "appendChild" in node) {
         prevRight = void 0;
-        for (const k of n.c || []) {
-          await rec(k, node, x, y, false, n.r);
+        const refRect = INLINE.has(n.t) && !isRoot ? parentRect : n.r;
+        const kids = n.c || [];
+        let flow = null;
+        const runsOf = (k) => k.t === "#text" ? [k] : INLINE.has(k.t) && !k.img && !hasStyle(k) ? inlineRuns(k) : null;
+        for (let i = 0; i < kids.length; i++) {
+          const k = kids[i];
+          let chain = [], j = i;
+          for (; j < kids.length; j++) {
+            const rs = runsOf(kids[j]);
+            if (!rs || !rs.length) break;
+            const next = chain.concat(rs);
+            if (!adjacentChain(next)) break;
+            chain = next;
+          }
+          if (chain.length >= 2 && j - i >= 2) {
+            const last = kids[j - 1];
+            const t = await buildMerged(chain, node, x, y, refRect, last.r[1] + last.r[3]);
+            for (let q = i; q < j; q++) tick();
+            const lastRun = chain[chain.length - 1];
+            prevRight = lastRun.r[0] + lastRun.r[2];
+            flow = t.textAutoResize === "WIDTH_AND_HEIGHT" ? { run: lastRun, dx: t.x + t.width + x - prevRight } : null;
+            i = j - 1;
+            continue;
+          }
+          const made = await rec(k, node, x, y, false, refRect);
+          if (made && flow && k.t !== "#text" && sameLine(flow.run, k) && k.r[0] >= flow.run.r[0] + flow.run.r[2] - 2) made.x += flow.dx;
+          else flow = null;
           prevRight = k.t === "#text" ? k.r[0] + k.r[2] : void 0;
         }
       }

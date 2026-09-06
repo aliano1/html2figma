@@ -114,6 +114,24 @@ const overlaps = (a: CapNode, b: CapNode) => {
   const [ax, ay, aw, ah] = a.r, [bx, by, bw, bh] = b.r;
   return ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
 };
+const sameLine = (a: CapNode, b: CapNode) => {
+  const [, ay, , ah] = a.r, [, by, , bh] = b.r;
+  const ov = Math.min(ay + ah, by + bh) - Math.max(ay, by);
+  return ov >= 0.5 * Math.min(ah, bh);
+};
+// Single-line inline runs that sit next to each other ("or from " + <b>$85.29</b> + "/mo with").
+// Built as separate text nodes they drift into each other under a fallback font, so merge them.
+const adjacentChain = (runs: CapNode[]) => {
+  // pseudo-element runs (chevrons, icon glyphs) and private-use glyphs keep their own handling
+  if (runs.some(k => (k.lines || 1) > 1 || (k as any).pseudo || PUA_RE.test(k.txt || ''))) return false;
+  for (let i = 1; i < runs.length; i++) {
+    const a = runs[i - 1], b = runs[i];
+    if (!sameLine(a, b)) return false;
+    const gap = b.r[0] - (a.r[0] + a.r[2]);
+    if (gap < -2 || gap > 1.5 * (b.f?.fs || 14)) return false;
+  }
+  return true;
+};
 
 // ---------- fonts ----------
 class FontResolver {
@@ -200,10 +218,15 @@ export async function build(cap: Capture, opts: BuildOptions = {}): Promise<Fram
     t.fontName = primary;
     // concatenate runs
     let txt = ''; const segs: { s: number; e: number; f: any }[] = [];
-    for (const k of runs) {
-      let piece = k.txt || '';
+    for (let i = 0; i < runs.length; i++) {
+      const k = runs[i]; let piece = k.txt || '';
       if (!txt && runs.length > 1) piece = piece.replace(/^\s+/, '');
-      else if (!txt.endsWith(' ') && !piece.startsWith(' ')) piece = ' ' + piece;
+      else if (i > 0 && !txt.endsWith(' ') && !piece.startsWith(' ')) {
+        // Neither side carries a space: insert one unless the runs visibly touch on the same line ("$85.29" + "/mo").
+        const p = runs[i - 1]; const gap = k.r[0] - (p.r[0] + p.r[2]);
+        const touching = sameLine(p, k) && gap < 0.2 * (k.f?.fs || 14);
+        if (!touching) piece = ' ' + piece;
+      }
       const s = txt.length; txt += piece; segs.push({ s, e: txt.length, f: k.f });
     }
     txt = txt.replace(/\s+$/, ''); segs[segs.length - 1].e = txt.length;
@@ -226,7 +249,7 @@ export async function build(cap: Capture, opts: BuildOptions = {}): Promise<Fram
         if ((g.f.td || '').includes('underline')) t.setRangeTextDecoration(g.s, g.e, 'UNDERLINE');
       }
     }
-    const multiline = runs.length > 1 || (runs[0].lines || 1) > 1;
+    const multiline = runs.length > 1 ? !adjacentChain(runs) : (runs[0].lines || 1) > 1;
     if (multiline) { t.textAutoResize = 'HEIGHT'; t.resize(Math.max(box[2] * 1.04 + 4, 4), Math.max(box[3], 1)); }
     else t.textAutoResize = 'WIDTH_AND_HEIGHT';
     padOf.set(t, multiline ? (Math.max(box[2] * 1.04 + 4, 4) - box[2]) / 2 : 0);
@@ -241,13 +264,42 @@ export async function build(cap: Capture, opts: BuildOptions = {}): Promise<Fram
     let recurse = true;
 
     const runs = (n.t !== '#text' && !n.img && n.t !== 'svg') ? inlineRuns(n) : null;
-    const merged = runs && runs.length >= 2 && (runs.some(k => (k.lines || 1) > 1) || runs.some((a, i) => runs.slice(i + 1).some(b => overlaps(a, b))));
+    const merged = runs && runs.length >= 2 && (runs.some(k => (k.lines || 1) > 1) || runs.some((a, i) => runs.slice(i + 1).some(b => overlaps(a, b))) || adjacentChain(runs));
+
+    // Where does a single-line run sit inside its parent box? Flex/grid centering doesn't show up in
+    // text-align, so infer it from the gaps. Matters when a fallback font renders wider/narrower.
+    const anchorSingle = (t: TextNode, rx: number, rw: number, pr: [number, number, number, number]) => {
+      const gapL = rx - pr[0], gapR = pr[0] + pr[2] - (rx + rw);
+      let anchor: 'LEFT' | 'CENTER' | 'RIGHT' = t.textAlignHorizontal === 'CENTER' ? 'CENTER' : t.textAlignHorizontal === 'RIGHT' ? 'RIGHT' : 'LEFT';
+      if (anchor === 'LEFT' && gapL > 1 && Math.abs(gapL - gapR) <= Math.max(2, 0.02 * pr[2])) anchor = 'CENTER';
+      else if (anchor === 'LEFT' && gapR < 1 && gapL > 4) anchor = 'RIGHT';
+      if (anchor === 'CENTER') t.x = rx - px0 + (rw - t.width) / 2;
+      else if (anchor === 'RIGHT') t.x = rx - px0 + rw - t.width;
+    };
+
+    // Several inline runs → one rich text node. `block` is the box they flow in (for anchoring),
+    // `bottom` the page-y where the text ends.
+    const buildMerged = async (rs: CapNode[], into: BaseNode & ChildrenMixin, ox: number, oy: number, block: [number, number, number, number], bottom: number) => {
+      const r0 = rs[0]; const lh = px(r0.f.lh);
+      const top = r0.r[1] - (lh ? (lh - r0.r[3]) / 2 : 0);
+      const rx = Math.min(...rs.map(k => k.r[0])), rw = Math.max(...rs.map(k => k.r[0] + k.r[2])) - rx;
+      const t = await makeText(rs, [rx, top, rw, bottom - top], nameOf(r0));
+      into.appendChild(t); t.x = rx - ox - (padOf.get(t) || 0); t.y = top - oy;
+      if (t.textAutoResize === 'WIDTH_AND_HEIGHT') {
+        // one visual line: anchor by the block box and keep the centre line
+        const gapL = rx - block[0], gapR = block[0] + block[2] - (rx + rw);
+        let anchor: 'LEFT' | 'CENTER' | 'RIGHT' = t.textAlignHorizontal === 'CENTER' ? 'CENTER' : t.textAlignHorizontal === 'RIGHT' ? 'RIGHT' : 'LEFT';
+        if (anchor === 'LEFT' && gapL > 1 && Math.abs(gapL - gapR) <= Math.max(2, 0.02 * block[2])) anchor = 'CENTER';
+        else if (anchor === 'LEFT' && gapR < 1 && gapL > 4) anchor = 'RIGHT';
+        if (anchor === 'CENTER') t.x = rx - ox + (rw - t.width) / 2;
+        else if (anchor === 'RIGHT') t.x = rx - ox + rw - t.width;
+        t.y = top - oy + (Math.max(lh || 0, r0.r[3]) - t.height) / 2;
+      }
+      return t;
+    };
 
     if (merged) {
-      const r0 = runs![0]; const lh = px(r0.f.lh);
-      const top = r0.r[1] - (lh ? (lh - r0.r[3]) / 2 : 0);
-      node = await makeText(runs!, [x, top, w, y + h - top], nameOf(runs![0]));
-      parent.appendChild(node); node.x = x - px0 - (padOf.get(node) || 0); node.y = top - py0;
+      node = await buildMerged(runs!, parent, px0, py0, n.r, y + h);
       recurse = false;
     } else if (n.t === '#text' && PUA_RE.test(n.txt || '')) {
       // icon-font glyphs (private-use codepoints, e.g. review stars) → one star per glyph
@@ -267,14 +319,7 @@ export async function build(cap: Capture, opts: BuildOptions = {}): Promise<Fram
       parent.appendChild(t);
       t.x = x - px0; t.y = top - py0;
       if (t.textAutoResize === 'WIDTH_AND_HEIGHT') {
-        // Where does this run sit inside its parent box? Flex/grid centering doesn't show up in
-        // text-align, so infer it from the gaps. Matters when a fallback font renders wider/narrower.
-        const pr = parentRect; const gapL = x - pr[0], gapR = pr[0] + pr[2] - (x + w);
-        let anchor: 'LEFT' | 'CENTER' | 'RIGHT' = t.textAlignHorizontal === 'CENTER' ? 'CENTER' : t.textAlignHorizontal === 'RIGHT' ? 'RIGHT' : 'LEFT';
-        if (anchor === 'LEFT' && gapL > 1 && Math.abs(gapL - gapR) <= Math.max(2, 0.02 * pr[2])) anchor = 'CENTER';
-        else if (anchor === 'LEFT' && gapR < 1 && gapL > 4) anchor = 'RIGHT';
-        if (anchor === 'CENTER') t.x = x - px0 + (w - t.width) / 2;
-        else if (anchor === 'RIGHT') t.x = x - px0 + w - t.width;
+        anchorSingle(t, x, w, parentRect);
         // vertical: keep the run's centre line
         t.y = top - py0 + (Math.max(lh || 0, h) - t.height) / 2;
         // an ::after run flows from the actual right edge of the preceding text, whatever font rendered it
@@ -317,7 +362,33 @@ export async function build(cap: Capture, opts: BuildOptions = {}): Promise<Fram
     tick();
     if (recurse && node && 'appendChild' in node) {
       prevRight = undefined;
-      for (const k of n.c || []) { await rec(k, node as FrameNode, x, y, false, n.r); prevRight = k.t === '#text' ? k.r[0] + k.r[2] : undefined; }
+      // An inline wrapper (<span>, <a>, <b>…) hugs its text, so it says nothing about where the text sits;
+      // keep the enclosing block as the reference box for left/centre/right anchoring.
+      const refRect: [number, number, number, number] = INLINE.has(n.t) && !isRoot ? parentRect : n.r;
+      const kids = n.c || [];
+      let flow: { run: CapNode; dx: number } | null = null;
+      const runsOf = (k: CapNode): CapNode[] | null => k.t === '#text' ? [k] : (INLINE.has(k.t) && !k.img && !hasStyle(k)) ? inlineRuns(k) : null;
+      for (let i = 0; i < kids.length; i++) {
+        const k = kids[i];
+        // A mixed line — "or from " <b>$85.29</b> "/mo with " <svg logo> — isn't fully mergeable at the block
+        // level, so merge the longest run of consecutive same-line text children here and build the rest as usual.
+        let chain: CapNode[] = [], j = i;
+        for (; j < kids.length; j++) { const rs = runsOf(kids[j]); if (!rs || !rs.length) break; const next = chain.concat(rs); if (!adjacentChain(next)) break; chain = next; }
+        if (chain.length >= 2 && j - i >= 2) {
+          const last = kids[j - 1];
+          const t = await buildMerged(chain, node as FrameNode, x, y, refRect, last.r[1] + last.r[3]);
+          for (let q = i; q < j; q++) tick();
+          const lastRun = chain[chain.length - 1];
+          prevRight = lastRun.r[0] + lastRun.r[2];
+          // whatever follows on this line (an inline logo, an info icon) flows from the text's real right edge
+          flow = t.textAutoResize === 'WIDTH_AND_HEIGHT' ? { run: lastRun, dx: (t.x + t.width + x) - prevRight } : null;
+          i = j - 1; continue;
+        }
+        const made = await rec(k, node as FrameNode, x, y, false, refRect);
+        if (made && flow && k.t !== '#text' && sameLine(flow.run, k) && k.r[0] >= flow.run.r[0] + flow.run.r[2] - 2) made.x += flow.dx;
+        else flow = null;
+        prevRight = k.t === '#text' ? k.r[0] + k.r[2] : undefined;
+      }
     }
     if (isRoot && node) node.setSharedPluginData('html2figma', 'meta', JSON.stringify({ url: cap.url, viewport: cap.viewport, capturedAt: (cap as any).capturedAt }));
     return node;
