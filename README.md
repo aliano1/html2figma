@@ -74,7 +74,7 @@ Layer names follow the tag and first class (`div · product-gallery`), and the r
 - **Bookmarklet + cross-origin `<video>`**: can't be frame-grabbed (canvas taint); you get the poster or a placeholder. The server path screenshots it instead.
 - **Bookmarklet on strict-CSP sites**: some sites block `javascript:` URLs via CSP. Paste the contents of `dist/bookmarklet.js` into the DevTools console instead — identical result.
 - **Very large pages** (>8 MB JSON) — use Download rather than Copy.
-- Transforms (`rotate`, `scale`), `mix-blend-mode`, `filter`, `backdrop-filter`, CSS masks and text-shadow are not translated yet.
+- CSS `filter` is handled: `drop-shadow()` becomes a Figma shadow, everything else (grayscale, blur…) is screenshotted as rendered (server) or baked into the image pixels (bookmarklet, `<img>` only). Transforms (`rotate`, `scale`), `mix-blend-mode`, `backdrop-filter`, CSS masks and text-shadow are not translated yet.
 
 ## Roadmap
 

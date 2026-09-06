@@ -70,7 +70,7 @@
   }
   function nameOf(n) {
     if (n.t === "#text") return (n.txt || "").trim().slice(0, 40);
-    if (n.img) return n.t === "video" ? "video frame" : n.glyph ? "glyph (raster)" : n.pseudo ? "pseudo image" : "image";
+    if (n.img) return n.t === "video" ? "video frame" : n.glyph ? "glyph (raster)" : n.pseudo ? "pseudo image" : n.filt ? `image (${String(n.filt).slice(0, 24)})` : "image";
     if (n.t === "svg") return "icon";
     const nm = n.nm || n.id || (n.cl || "").split(" ")[0];
     const base = nm && nm !== n.t ? `${n.t} \xB7 ${nm}`.slice(0, 60) : n.t;

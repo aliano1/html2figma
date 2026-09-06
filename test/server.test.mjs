@@ -32,6 +32,8 @@ for (const { viewport, capture } of out.captures || []) {
   check(stars.length === 6 && stars.every(s => s.img && s.img.startsWith('data:image/png')), `${viewport[0]}: 6 icon-font glyph elements rasterised (5 ::before stars + 1 text run) (got ${stars.length}, ${stars.filter(s => s.img).length} with image)`);
   check(shotErrs.length === 0, `${viewport[0]}: no screenshot errors ${shotErrs.map(e => e.shotError).join('; ')}`);
   check(!nodes.some(n => n.txt === 'Hidden content that should NOT be captured.'), `${viewport[0]}: closed details excluded`);
+  const logo = nodes.find(n => n.filt);
+  check(!!logo && /^data:image\/png/.test(logo.img || '') && !(logo.s && logo.s.op), `${viewport[0]}: grayscale logo screenshotted as rendered, opacity not double-applied (filt=${logo && logo.filt}, op=${logo && logo.s && logo.s.op})`);
   writeFileSync(`test/capture-${viewport[0]}.json`, JSON.stringify(capture));
 }
 if (out.captures) writeFileSync('test/capture.json', JSON.stringify(out.captures[0].capture));

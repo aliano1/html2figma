@@ -126,6 +126,21 @@ export function extract(options = {}) {
     if (br.some(x => x > 0)) s.br = br;
     if (parseFloat(cs.opacity) < 1) s.op = parseFloat(cs.opacity);
     if (cs.boxShadow && cs.boxShadow !== 'none') s.sh = cs.boxShadow;
+    // CSS filters: drop-shadow() maps onto a Figma shadow; anything else (grayscale, blur, brightness…
+    // e.g. press logos in grey) can't be expressed as layer properties → rasterise (server) / bake into the image (bookmarklet).
+    let filt = null;
+    if (cs.filter && cs.filter !== 'none') {
+      const rest = cs.filter.replace(/drop-shadow\((rgba?\([^)]*\))\s+(-?[\d.]+px)\s+(-?[\d.]+px)(?:\s+(-?[\d.]+px))?\)/g, (_, c, x, y, b) => {
+        s.sh = (s.sh ? s.sh + ', ' : '') + `${c} ${x} ${y} ${b || '0px'} 0px`; return '';
+      }).trim();
+      if (rest) filt = rest;
+    }
+    if (filt) {
+      const isMedia = /^(IMG|svg|VIDEO|CANVAS)$/.test(el.tagName);
+      const modest = r[2] * r[3] <= 800 * 800 && el.querySelectorAll('img, svg, video, canvas').length <= 4;   // don't flatten whole sections
+      if (opts.markForRaster && (isMedia || modest)) { n.filt = filt; n.rasterAll = true; }
+      else if (el.tagName === 'IMG') n.filt = filt;   // bookmarklet: inlineImages bakes it into the pixels
+    }
     if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') s.ov = 'hidden';
     if (cs.position === 'fixed' || cs.position === 'sticky') { s.pos = cs.position; if (fi && fi.bottom) s.fixedBottom = true; }
     if (cs.display.includes('flex')) {
@@ -133,6 +148,7 @@ export function extract(options = {}) {
                p: [cs.paddingTop, cs.paddingRight, cs.paddingBottom, cs.paddingLeft].map(parseFloat) };
     }
 
+    if (n.rasterAll) { delete n.rasterAll; markShot(el, n); }   // filtered element → server screenshots it as rendered
     if (el.tagName === 'IMG') {
       n.img = el.currentSrc || el.src; n.nat = [el.naturalWidth, el.naturalHeight]; s.fit = cs.objectFit;
     } else if (el.tagName === 'VIDEO') {
@@ -255,36 +271,43 @@ export async function warmUp(step = 600, delay = 120) {
 export async function inlineImages(capture, { maxDim = 1600, quality = 0.85, onProgress } = {}) {
   const nodes = [];
   (function collect(n) {
-    if (n.img && !n.img.startsWith('data:')) nodes.push([n, 'img']);
+    if (n.img && !n.img.startsWith('data:')) nodes.push([n, 'img', n.filt]);
     if (n.s && n.s.bgi && !n.s.bgi.startsWith('data:')) nodes.push([n.s, 'bgi']);
     (n.c || []).forEach(collect);
   })(capture.tree);
 
   const cache = new Map();
   let done = 0;
-  async function toData(url) {
-    if (cache.has(url)) return cache.get(url);
+  // `filt` is a CSS filter (grayscale(1), blur(2px)…) baked into the pixels via canvas — always a raster then.
+  async function toData(url, filt) {
+    const key = url + '|' + (filt || '');
+    if (cache.has(key)) return cache.get(key);
     const p = (async () => {
       try {
         const res = await fetch(url, { credentials: 'include' });
         const blob = await res.blob();
-        if (blob.type === 'image/svg+xml') return { data: await blob.text(), type: 'svg' };
-        const bmp = await createImageBitmap(blob);
-        const scale = Math.min(1, maxDim / Math.max(bmp.width, bmp.height));
+        if (blob.type === 'image/svg+xml' && !filt) return { data: await blob.text(), type: 'svg' };
+        const bmp = blob.type === 'image/svg+xml'
+          ? await new Promise((ok, no) => { const im = new Image(); im.onload = () => ok(im); im.onerror = no; im.src = URL.createObjectURL(blob); })
+          : await createImageBitmap(blob);
+        const bw = bmp.naturalWidth || bmp.width, bh = bmp.naturalHeight || bmp.height;
+        const scale = Math.min(1, maxDim / Math.max(bw, bh)) * (blob.type === 'image/svg+xml' ? 2 : 1);
         const c = document.createElement('canvas');
-        c.width = Math.max(1, Math.round(bmp.width * scale)); c.height = Math.max(1, Math.round(bmp.height * scale));
-        c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-        const isPng = blob.type === 'image/png' || blob.type === 'image/gif' || blob.type === 'image/webp';
+        c.width = Math.max(1, Math.round(bw * scale)); c.height = Math.max(1, Math.round(bh * scale));
+        const ctx = c.getContext('2d');
+        if (filt) ctx.filter = filt;
+        ctx.drawImage(bmp, 0, 0, c.width, c.height);
+        const isPng = blob.type !== 'image/jpeg' || !!filt;
         return { data: isPng ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', quality), type: 'raster' };
       } catch (_) {
         return null; // CORS-blocked; plugin will try by URL
       }
     })();
-    cache.set(url, p);
+    cache.set(key, p);
     return p;
   }
-  await Promise.all(nodes.map(async ([holder, key]) => {
-    const r = await toData(holder[key]);
+  await Promise.all(nodes.map(async ([holder, key, filt]) => {
+    const r = await toData(holder[key], filt);
     if (r && r.type === 'svg') { holder.svgFile = r.data; }
     else if (r) { holder[key] = r.data; }
     done++; onProgress && onProgress(done, nodes.length);

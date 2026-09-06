@@ -35,6 +35,19 @@ if (inst[0]) { const icon = inst[0].parent.children.find(c => c !== inst[0] && c
 const lbl = byChars('Add to cart')[0];
 if (lbl) { const btn = (function up(n) { return n.name.includes('flexbtn') ? n : n.parent && n.parent.type !== 'PAGE' ? up(n.parent) : null; })(lbl); const [lx] = abs(lbl), [bx] = abs(btn); const gapL = lx - bx, gapR = bx + btn.width - (lx + lbl.width); check(Math.abs(gapL - gapR) < 2, `flex-centred label stays centred (gaps ${gapL.toFixed(1)} / ${gapR.toFixed(1)})`); }
 check(root.findAll(n => n.type === 'RECTANGLE' && n.name === 'image' && n.fills[0] && n.fills[0].type === 'IMAGE').length === 1, 'inlined image became an IMAGE fill');
+const logoCap = (function find(n) { if (n.filt) return n; for (const k of n.c || []) { const r = find(k); if (r) return r; } return null; })(cap.tree);
+check(!!logoCap && /^data:image\/png/.test(logoCap.img || ''), `filtered <img> captured as a baked PNG (filter=${logoCap && logoCap.filt})`);
+if (logoCap) {
+  // decode the PNG's first pixel: grayscale(1) of pure red must give r≈g≈b
+  const { inflateSync } = await import('node:zlib');
+  const buf = Buffer.from(logoCap.img.split(',')[1], 'base64');
+  let pos = 8, idat = [], w = 0, ct = 0;
+  while (pos < buf.length) { const len = buf.readUInt32BE(pos), type = buf.toString('ascii', pos + 4, pos + 8); const d = buf.subarray(pos + 8, pos + 8 + len); if (type === 'IHDR') { w = d.readUInt32BE(0); ct = d[9]; } if (type === 'IDAT') idat.push(d); pos += 12 + len; }
+  const raw = inflateSync(Buffer.concat(idat)); const bpp = ct === 6 ? 4 : 3; const px = raw.subarray(1 + Math.floor(w / 2) * bpp, 1 + Math.floor(w / 2) * bpp + 3);
+  check(Math.abs(px[0] - px[1]) < 8 && Math.abs(px[1] - px[2]) < 8 && px[0] > 30, `grayscale baked into pixels (mid pixel rgb=${[...px].join(',')})`);
+  const logoNode = root.findAll(n => n.type === 'RECTANGLE' && /^image \(grayscale/.test(n.name))[0];
+  check(!!logoNode && logoNode.fills[0].type === 'IMAGE', 'filtered image layer named after its filter');
+}
 check(!texts.some(t => t.characters === 'Hidden content that should NOT be captured.'), 'closed <details> content excluded');
 check(byChars('E-mail').length === 1, 'input placeholder captured');
 const sticky = byChars('Add to cart — sticky')[0];

@@ -94,7 +94,7 @@ function collapse(n: CapNode): CapNode {
 }
 function nameOf(n: CapNode) {
   if (n.t === '#text') return (n.txt || '').trim().slice(0, 40);
-  if (n.img) return n.t === 'video' ? 'video frame' : (n as any).glyph ? 'glyph (raster)' : (n as any).pseudo ? 'pseudo image' : 'image';
+  if (n.img) return n.t === 'video' ? 'video frame' : (n as any).glyph ? 'glyph (raster)' : (n as any).pseudo ? 'pseudo image' : (n as any).filt ? `image (${String((n as any).filt).slice(0, 24)})` : 'image';
   if (n.t === 'svg') return 'icon';
   const nm = n.nm || n.id || (n.cl || '').split(' ')[0];
   const base = nm && nm !== n.t ? `${n.t} · ${nm}`.slice(0, 60) : n.t;

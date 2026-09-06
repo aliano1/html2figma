@@ -151,6 +151,7 @@ async function rasterise(page, capture) {
       const png = await loc.screenshot({ type: 'png', omitBackground: true, timeout: 8000, animations: 'disabled' });
       n.img = 'data:image/png;base64,' + png.toString('base64');
       n.s = Object.assign({}, n.s, { fit: n.s && n.s.fit === 'contain' ? 'contain' : 'cover' });
+      delete n.s.op;         // the screenshot already shows the element at its own opacity (and filter)
       if (n.t === 'svg') { delete n.svg; n.t = 'div'; }
       delete n.c;            // the screenshot already contains any children
     } catch (e) {
