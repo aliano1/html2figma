@@ -289,6 +289,9 @@ export function extract(options = {}) {
       kids.push(ak);
     }
     if (kids.length) n.c = kids;
+    // An inline tag laid out as a block (<span style="display:block">, flex/grid children) is a paragraph
+    // boundary, not part of the surrounding run — the builder must not merge it into a neighbouring text.
+    if (!/^inline/.test(cs.display) && /^(span|a|b|strong|em|i|u|small|mark|abbr|time|label|sup|sub)$/i.test(el.tagName)) n.blk = true;
     if (el.id) n.id = el.id;
     const cl = (typeof el.className === 'string') ? el.className.trim().split(/\s+/).slice(0, 3).join(' ') : '';
     if (cl) n.cl = cl;

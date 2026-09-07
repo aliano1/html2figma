@@ -72,6 +72,13 @@ check(fontReport && fontReport.some(f => f.family === 'Komet' && !f.installed &&
   const horiz = strokes.find(c => c.width > c.height), vert = strokes.find(c => c.height > c.width);
   check(!!horiz && !!vert && Math.abs(vert.width - 2) < 0.6 && Math.abs(vert.height - 14) < 0.6 && Math.abs((horiz.x + horiz.width / 2) - (vert.x + vert.width / 2)) < 0.6 && Math.abs((horiz.y + horiz.height / 2) - (vert.y + vert.height / 2)) < 0.6, `CSS "+" icon: rotated ::after becomes the vertical stroke, centred on the horizontal one (${strokes.map(c => `${c.width}×${c.height}@${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' / ')})`);
 }
+// stacked display:block spans inside an inline tag are separate paragraphs: no merging, and the eyebrow's
+// text-transform must not leak onto its siblings
+{
+  const eyebrow = byChars('BETTER VALUE'), title = byChars('Pure Steam'), price = byChars('$795.00');
+  check(eyebrow.length === 1 && eyebrow[0].characters === 'BETTER VALUE', `uppercase eyebrow kept as its own layer ("${eyebrow[0] && eyebrow[0].characters}")`);
+  check(title.length === 1 && title[0].characters.startsWith('Pure Steam — includes') && price.length === 1 && price[0].characters === '$795.00 for the complete system', `title and price stay separate, in their own case (${title.length}/${price.length})`);
+}
 const lbl = byChars('Add to cart')[0];
 if (lbl) { const btn = (function up(n) { return n.name.includes('flexbtn') ? n : n.parent && n.parent.type !== 'PAGE' ? up(n.parent) : null; })(lbl); const [lx] = abs(lbl), [bx] = abs(btn); const gapL = lx - bx, gapR = bx + btn.width - (lx + lbl.width); check(Math.abs(gapL - gapR) < 2, `flex-centred label stays centred (gaps ${gapL.toFixed(1)} / ${gapR.toFixed(1)})`); }
 check(root.findAll(n => n.type === 'RECTANGLE' && n.name === 'image' && n.fills[0] && n.fills[0].type === 'IMAGE').length === 3, 'inlined images became IMAGE fills (card photo + 2 thumbnails)');

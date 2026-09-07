@@ -111,7 +111,7 @@ function inlineRuns(n: CapNode): CapNode[] | null {
   const out: CapNode[] = [];
   for (const k of n.c || []) {
     if (k.t === '#text') out.push(k);
-    else if (INLINE.has(k.t) && !['bg', 'bw', 'bgi', 'grad', 'sh'].some(x => k.s && x in k.s)) {
+    else if (INLINE.has(k.t) && !(k as any).blk && !['bg', 'bw', 'bgi', 'grad', 'sh'].some(x => k.s && x in k.s)) {
       const r = inlineRuns(k); if (!r) return null; out.push(...r);
     } else return null;
   }
@@ -271,6 +271,9 @@ export async function build(cap: Capture, opts: BuildOptions = {}): Promise<Fram
     let txt = ''; const segs: { s: number; e: number; f: any }[] = [];
     for (let i = 0; i < runs.length; i++) {
       const k = runs[i]; let piece = k.txt || '';
+      const tt = (k.f && k.f.tt) || f0.tt;
+      if (tt === 'uppercase') piece = piece.toUpperCase(); else if (tt === 'lowercase') piece = piece.toLowerCase();
+      else if (tt === 'capitalize') piece = piece.replace(/(^|\s)(\S)/g, (m, a, b) => a + b.toUpperCase());
       if (!txt && runs.length > 1) piece = piece.replace(/^\s+/, '');
       else if (i > 0 && !txt.endsWith(' ') && !piece.startsWith(' ')) {
         // Neither side carries a space: insert one unless the runs visibly touch on the same line ("$85.29" + "/mo").
@@ -281,7 +284,6 @@ export async function build(cap: Capture, opts: BuildOptions = {}): Promise<Fram
       const s = txt.length; txt += piece; segs.push({ s, e: txt.length, f: k.f });
     }
     txt = txt.replace(/\s+$/, ''); segs[segs.length - 1].e = txt.length;
-    if (f0.tt === 'uppercase') txt = txt.toUpperCase(); else if (f0.tt === 'lowercase') txt = txt.toLowerCase();
     t.characters = txt || ' ';
     t.fontSize = f0.fs;
     const lh = px(f0.lh); t.lineHeight = lh ? { unit: 'PIXELS', value: lh } : { unit: 'AUTO' };
@@ -445,7 +447,7 @@ export async function build(cap: Capture, opts: BuildOptions = {}): Promise<Fram
       const refRect: [number, number, number, number] = INLINE.has(n.t) && !isRoot ? parentRect : n.r;
       const kids = n.c || [];
       let flow: { run: CapNode; dx: number } | null = null;
-      const runsOf = (k: CapNode): CapNode[] | null => k.t === '#text' ? [k] : (INLINE.has(k.t) && !k.img && !hasStyle(k)) ? inlineRuns(k) : null;
+      const runsOf = (k: CapNode): CapNode[] | null => k.t === '#text' ? [k] : (INLINE.has(k.t) && !(k as any).blk && !k.img && !hasStyle(k)) ? inlineRuns(k) : null;
       for (let i = 0; i < kids.length; i++) {
         const k = kids[i];
         // A mixed line — "or from " <b>$85.29</b> "/mo with " <svg logo> — isn't fully mergeable at the block
