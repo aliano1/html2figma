@@ -134,10 +134,27 @@ export function extract(options = {}) {
     // e.g. press logos in grey) can't be expressed as layer properties → rasterise (server) / bake into the image (bookmarklet).
     let filt = null;
     if (cs.filter && cs.filter !== 'none') {
-      const rest = cs.filter.replace(/drop-shadow\((rgba?\([^)]*\))\s+(-?[\d.]+px)\s+(-?[\d.]+px)(?:\s+(-?[\d.]+px))?\)/g, (_, c, x, y, b) => {
-        s.sh = (s.sh ? s.sh + ', ' : '') + `${c} ${x} ${y} ${b || '0px'} 0px`; return '';
-      }).trim();
+      const rest = cs.filter
+        .replace(/drop-shadow\((rgba?\([^)]*\))\s+(-?[\d.]+px)\s+(-?[\d.]+px)(?:\s+(-?[\d.]+px))?\)/g, (_, c, x, y, b) => {
+          s.sh = (s.sh ? s.sh + ', ' : '') + `${c} ${x} ${y} ${b || '0px'} 0px`; return '';
+        })
+        // identity filters — the resting state of a hover transition (brightness(1) on cards etc.) — change nothing
+        .replace(/\b(brightness|contrast|saturate|opacity)\(\s*(1|100%)\s*\)/g, '')
+        .replace(/\b(grayscale|sepia|invert)\(\s*(0|0%)\s*\)/g, '')
+        .replace(/\bblur\(\s*0(px)?\s*\)/g, '').replace(/\bhue-rotate\(\s*0(deg)?\s*\)/g, '')
+        // opacity(x) is just layer opacity; blur(x) is a Figma layer blur
+        .replace(/\bopacity\(\s*([\d.]+)(%?)\s*\)/g, (_, v, pct) => { const o = pct ? parseFloat(v) / 100 : parseFloat(v); s.op = (s.op === undefined ? 1 : s.op) * o; return ''; })
+        .replace(/\bblur\(\s*([\d.]+)px\s*\)/g, (_, v) => { s.lblur = parseFloat(v); return ''; })
+        .trim();
       if (rest) filt = rest;
+    }
+    // backdrop-filter: blur(x) is a Figma background blur (frosted pills, play buttons); anything else in it is dropped
+    let bdfRest = null;
+    const bdfRaw = cs.backdropFilter || cs.webkitBackdropFilter;
+    if (bdfRaw && bdfRaw !== 'none') {
+      bdfRest = bdfRaw.replace(/\bblur\(\s*([\d.]+)px\s*\)/g, (_, v) => { s.bblur = parseFloat(v); return ''; })
+        .replace(/\b(brightness|contrast|saturate|opacity)\(\s*(1|100%)\s*\)/g, '').replace(/\b(grayscale|sepia|invert)\(\s*(0|0%)\s*\)/g, '').trim();
+      if (!bdfRest) bdfRest = null;
     }
     // Other things Figma layers can't express. Rotation/scale/skew (translation is already in the
     // rects), clip-path, masks, blend modes, backdrop blur, text-shadow, vertical text: screenshot the
@@ -151,15 +168,21 @@ export function extract(options = {}) {
     if (cs.clipPath && cs.clipPath !== 'none') unsupported.push('clip-path');
     const mask = cs.maskImage || cs.webkitMaskImage; if (mask && mask !== 'none') unsupported.push('mask');
     if (cs.mixBlendMode && cs.mixBlendMode !== 'normal') unsupported.push('mix-blend-mode');
-    const bdf = cs.backdropFilter || cs.webkitBackdropFilter; if (bdf && bdf !== 'none') unsupported.push('backdrop-filter');
+    if (bdfRest) unsupported.push('backdrop-filter: ' + bdfRest);
     if (cs.writingMode && cs.writingMode !== 'horizontal-tb') unsupported.push('writing-mode');
     if (filt) unsupported.unshift(filt);
     if (unsupported.length) {
       const isMedia = /^(IMG|svg|VIDEO|CANVAS)$/.test(el.tagName);
       const modest = r[2] * r[3] <= 800 * 800 && el.querySelectorAll('img, svg, video, canvas').length <= 4;   // don't flatten whole sections
-      if (opts.markForRaster && (isMedia || modest)) { n.filt = unsupported.join(' '); n.rasterAll = true; }
+      // Text stays editable: a container with real text is only flattened when geometry itself is wrong
+      // without it (rotation, clip-path, mask, vertical text). A tinted card keeps its layers and is
+      // named with the filter it lost.
+      const hasText = !isMedia && (el.textContent || '').trim().length > 0;
+      const geometric = unsupported.some(u => /^(transform|clip-path|mask|writing-mode)$/.test(u));
+      const flattenOk = isMedia || !hasText || geometric;
+      if (opts.markForRaster && (isMedia || (modest && flattenOk))) { n.filt = unsupported.join(' '); n.rasterAll = true; }
       else if (filt && el.tagName === 'IMG') n.filt = filt;   // bookmarklet: inlineImages bakes CSS filters into the pixels
-      else n.unsupported = unsupported;                       // bookmarklet: at least name it in the layer
+      else n.unsupported = unsupported;                       // keep the layers; name says what was dropped
     }
     if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') s.ov = 'hidden';
     if (cs.position === 'fixed' || cs.position === 'sticky') { s.pos = cs.position; if (fi && fi.bottom) s.fixedBottom = true; }

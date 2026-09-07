@@ -79,9 +79,18 @@ check(fontReport && fontReport.some(f => f.family === 'Komet' && !f.installed &&
   check(eyebrow.length === 1 && eyebrow[0].characters === 'BETTER VALUE', `uppercase eyebrow kept as its own layer ("${eyebrow[0] && eyebrow[0].characters}")`);
   check(title.length === 1 && title[0].characters.startsWith('Pure Steam — includes') && price.length === 1 && price[0].characters === '$795.00 for the complete system', `title and price stay separate, in their own case (${title.length}/${price.length})`);
 }
+// filters: identity brightness(1) is ignored; a real tint on a text card keeps the layers (named), never flattens
+{
+  const card = root.findAll(n => n.type === 'FRAME' && /kbcard/.test(n.name))[0];
+  check(!!card && !/⚠/.test(card.name) && byChars('Brightness-one card').length === 1, `brightness(1) card keeps its text layer and no warning (${card && card.name})`);
+  const pill = root.findAll(n => n.type === 'FRAME' && /pill/.test(n.name))[0];
+  check(!!pill && byChars('SIGNATURE TECHNOLOGY').length === 1 && pill.effects.some(e => e.type === 'BACKGROUND_BLUR' && e.radius === 8), `backdrop-filter pill keeps its text and gets a Figma background blur (${pill && JSON.stringify(pill.effects)})`);
+  const tint = root.findAll(n => n.type === 'FRAME' && /kbtint/.test(n.name))[0];
+  check(!!tint && byChars('Tinted card keeps text').length === 1 && (!serverCapture || /brightness/.test(tint.name)), `tinted text card stays layered, filter noted in the name (${tint && tint.name})`);
+}
 const lbl = byChars('Add to cart')[0];
 if (lbl) { const btn = (function up(n) { return n.name.includes('flexbtn') ? n : n.parent && n.parent.type !== 'PAGE' ? up(n.parent) : null; })(lbl); const [lx] = abs(lbl), [bx] = abs(btn); const gapL = lx - bx, gapR = bx + btn.width - (lx + lbl.width); check(Math.abs(gapL - gapR) < 2, `flex-centred label stays centred (gaps ${gapL.toFixed(1)} / ${gapR.toFixed(1)})`); }
-check(root.findAll(n => n.type === 'RECTANGLE' && n.name === 'image' && n.fills[0] && n.fills[0].type === 'IMAGE').length === 3, 'inlined images became IMAGE fills (card photo + 2 thumbnails)');
+check(root.findAll(n => n.type === 'RECTANGLE' && n.name === 'image' && n.fills[0] && n.fills[0].type === 'IMAGE').length === 4, 'inlined images became IMAGE fills (card photo + 2 thumbnails + kb card)');
 const logoCap = (function find(n) { if (n.filt) return n; for (const k of n.c || []) { const r = find(k); if (r) return r; } return null; })(cap.tree);
 check(!!logoCap && /^data:image\/png/.test(logoCap.img || ''), `filtered <img> captured as a baked PNG (filter=${logoCap && logoCap.filt})`);
 if (logoCap) {

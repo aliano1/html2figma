@@ -43,7 +43,7 @@
   var px = (v) => v && v.endsWith("px") ? parseFloat(v) : null;
   function hasStyle(n) {
     const s = n.s || {};
-    return ["bg", "bgi", "grad", "bw", "br", "sh", "op"].some((k) => k in s) || s.ov === "hidden";
+    return ["bg", "bgi", "grad", "bw", "br", "sh", "op", "lblur", "bblur"].some((k) => k in s) || s.ov === "hidden";
   }
   function prune(n, drop) {
     if (n.t === "#text") return n.txt && n.txt.trim() ? n : null;
@@ -270,8 +270,10 @@
           } else g.strokeWeight = Math.max(...s.bw);
         }
       }
-      if (s.sh && "effects" in n) {
-        const fx = parseShadow(s.sh);
+      if ("effects" in n) {
+        const fx = s.sh ? parseShadow(s.sh) : [];
+        if (s.lblur > 0) fx.push({ type: "LAYER_BLUR", radius: s.lblur, visible: true });
+        if (s.bblur > 0) fx.push({ type: "BACKGROUND_BLUR", radius: s.bblur, visible: true });
         if (fx.length) n.effects = fx;
       }
     };

@@ -72,7 +72,7 @@ const px = (v?: string) => (v && v.endsWith('px') ? parseFloat(v) : null);
 // ---------- tree preprocessing ----------
 function hasStyle(n: CapNode) {
   const s = n.s || {};
-  return ['bg', 'bgi', 'grad', 'bw', 'br', 'sh', 'op'].some(k => k in s) || s.ov === 'hidden';
+  return ['bg', 'bgi', 'grad', 'bw', 'br', 'sh', 'op', 'lblur', 'bblur'].some(k => k in s) || s.ov === 'hidden';
 }
 function prune(n: CapNode, drop: string[]): CapNode | null {
   if (n.t === '#text') return n.txt && n.txt.trim() ? n : null;
@@ -259,7 +259,12 @@ export async function build(cap: Capture, opts: BuildOptions = {}): Promise<Fram
         if (g.type === 'FRAME') { g.strokeTopWeight = s.bw[0]; g.strokeRightWeight = s.bw[1]; g.strokeBottomWeight = s.bw[2]; g.strokeLeftWeight = s.bw[3]; }
         else g.strokeWeight = Math.max(...s.bw); }
     }
-    if (s.sh && 'effects' in n) { const fx = parseShadow(s.sh); if (fx.length) (n as FrameNode).effects = fx; }
+    if ('effects' in n) {
+      const fx: Effect[] = s.sh ? parseShadow(s.sh) : [];
+      if (s.lblur > 0) fx.push({ type: 'LAYER_BLUR', radius: s.lblur, visible: true } as Effect);
+      if (s.bblur > 0) fx.push({ type: 'BACKGROUND_BLUR', radius: s.bblur, visible: true } as Effect);
+      if (fx.length) (n as FrameNode).effects = fx;
+    }
   };
 
   async function makeText(runs: CapNode[], box: [number, number, number, number], name: string): Promise<TextNode> {
