@@ -118,9 +118,15 @@ async function captureViewport(b, opts, width) {
 function upscaleUrl(url, r) {
   const want = Math.min(2048, Math.ceil((r ? r[2] : 0) * 2));
   if (!want) return url;
+  // `width=64&height=64&crop=center` (Shopify) — scale both, or the CDN returns a 128×64 crop
+  const wm = url.match(/[?&]width=(\d+)/), hm = url.match(/[?&]height=(\d+)/);
+  if (wm && hm && +wm[1] < want) {
+    const f = want / +wm[1];
+    return url.replace(/([?&])width=\d+/, `$1width=${want}`).replace(/([?&])height=(\d+)/, (m, p, h) => `${p}height=${Math.round(+h * f)}`);
+  }
   return url
     .replace(/([?&])width=(\d+)/, (m, p, w) => `${p}width=${Math.max(+w, want)}`)
-    .replace(/_(\d+)x(\d*)(\.[a-z]+)(\?|$)/i, (m, w, h, ext, q) => +w >= want ? m : `_${want}x${ext}${q}`)
+    .replace(/_(\d+)x(\d*)(_crop_[a-z]+)?(\.[a-z]+)(\?|$)/i, (m, w, h, crop, ext, q) => +w >= want ? m : `_${want}x${h ? Math.round(+h * want / +w) : ''}${crop || ''}${ext}${q}`)
     .replace(/\/w_(\d+)(,|\/)/, (m, w, sep) => +w >= want ? m : `/w_${want}${sep}`);
 }
 

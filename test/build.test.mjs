@@ -57,9 +57,18 @@ check(fontReport && fontReport.some(f => f.family === 'Komet' && !f.installed &&
   const body = root2.findAll(n => n.type === 'TEXT' && n.characters.startsWith('Our 15-piece'))[0];
   check(body && body.fontName.style === 'Regular', `weight 400 untouched (got ${body && body.fontName.style})`);
 }
+// content:"" pseudo boxes: the active thumbnail's 2px bar (in-flow ::after, opacity 1) and a tint overlay (absolute ::before, inset:0)
+{
+  const thumbs = root.findAll(n => n.type === 'FRAME' && /thumb/.test(n.name));
+  const bars = root.findAll(n => n.type === 'FRAME' && n.name.includes('::after') && Math.abs(n.height - 2) < 0.6 && Math.abs(n.width - 64) < 0.6);
+  check(thumbs.length === 2 && bars.length === 1, `only the active thumbnail gets its indicator bar (thumbs=${thumbs.length}, bars=${bars.length})`);
+  if (bars[0]) { const [, by] = abs(bars[0]); const host = bars[0].parent; const [, hy] = abs(host); check(Math.abs(by - (hy + host.height - 2)) < 1 && bars[0].fills[0] && bars[0].fills[0].type === 'SOLID', `bar sits at the bottom of its host (bar y=${by.toFixed(1)}, host bottom=${(hy + host.height).toFixed(1)})`); }
+  const tint = root.findAll(n => n.type === 'FRAME' && n.name.includes('::before') && Math.abs(n.width - 120) < 0.6 && Math.abs(n.height - 60) < 0.6)[0];
+  check(!!tint && tint.fills[0] && tint.fills[0].opacity > 0.35 && tint.fills[0].opacity < 0.45 && tint.topLeftRadius === 8, `absolute inset:0 overlay pseudo captured with its alpha and radius (${tint ? `opacity ${tint.fills[0].opacity}, radius ${tint.topLeftRadius}` : 'missing'})`);
+}
 const lbl = byChars('Add to cart')[0];
 if (lbl) { const btn = (function up(n) { return n.name.includes('flexbtn') ? n : n.parent && n.parent.type !== 'PAGE' ? up(n.parent) : null; })(lbl); const [lx] = abs(lbl), [bx] = abs(btn); const gapL = lx - bx, gapR = bx + btn.width - (lx + lbl.width); check(Math.abs(gapL - gapR) < 2, `flex-centred label stays centred (gaps ${gapL.toFixed(1)} / ${gapR.toFixed(1)})`); }
-check(root.findAll(n => n.type === 'RECTANGLE' && n.name === 'image' && n.fills[0] && n.fills[0].type === 'IMAGE').length === 1, 'inlined image became an IMAGE fill');
+check(root.findAll(n => n.type === 'RECTANGLE' && n.name === 'image' && n.fills[0] && n.fills[0].type === 'IMAGE').length === 3, 'inlined images became IMAGE fills (card photo + 2 thumbnails)');
 const logoCap = (function find(n) { if (n.filt) return n; for (const k of n.c || []) { const r = find(k); if (r) return r; } return null; })(cap.tree);
 check(!!logoCap && /^data:image\/png/.test(logoCap.img || ''), `filtered <img> captured as a baked PNG (filter=${logoCap && logoCap.filt})`);
 if (logoCap) {

@@ -17,6 +17,12 @@ details{border-bottom:1px solid #e5e7eb;padding:20px 0}
 .jdgm-star::before{content:"\e000"}
 .flexbtn{display:flex;align-items:center;justify-content:center;width:260px;height:56px;background:#cae00d;border-radius:60px;font-weight:500;font-size:16px;margin-top:16px}
 .chev::after{content:"\203A";margin-left:6px}
+.thumb{display:block;width:64px;height:70px;padding:0;border:0;background:none;margin-top:12px}
+.thumb img{display:block;width:64px;height:64px;object-fit:contain}
+.thumb::after{content:"";display:block;width:64px;height:2px;margin-top:4px;background:#1a1a1a;opacity:0}
+.thumb[aria-current=true]::after{opacity:1}
+.tint{position:relative;width:120px;height:60px;background:#888;margin-top:12px}
+.tint::before{content:"";position:absolute;inset:0;background:rgba(0,0,0,.4);border-radius:8px}
 @font-face{font-family:"Caladea";font-weight:500;font-style:normal;src:url(CaladeaBold.woff2) format("woff2")}
 </style></head><body>
 <a class="sr-only" href="#m">Skip</a>
@@ -33,6 +39,8 @@ details{border-bottom:1px solid #e5e7eb;padding:20px 0}
 <p class="chev" style="font-size:14px">See all specs</p>
 <p class="caladea" style="font-family:Caladea,serif;font-weight:500;font-size:18px">Webfont face loaded from the page</p>
 <p class="komet" style="font-family:Komet,Georgia,serif;font-size:15px;width:300px">Editable text in a font Figma does not have, wrapped over a couple of lines to check width matching.</p>
+<button class="thumb" aria-current="true"><img src="logo.png" alt=""></button><button class="thumb" aria-current="false"><img src="logo.png" alt=""></button>
+<div class="tint"></div>
 <div class="press"><img class="press-logo" src="logo.png" alt="" style="width:60px;height:40px;filter:grayscale(1);opacity:.7"></div>
 <p class="installments" style="font-size:13px">4 interest-free installments, or from <b>$85.29</b>/mo with <span style="font-weight:700">shop</span> <svg width="14" height="14" viewBox="0 0 14 14" style="vertical-align:middle"><circle cx="7" cy="7" r="6" fill="none" stroke="#333"/></svg></p>
 <details><summary>Benefits</summary><p>Hidden content that should NOT be captured.</p></details>

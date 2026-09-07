@@ -203,7 +203,32 @@ export function extract(options = {}) {
         (pseudo === '::after' ? afterKids : kids).push({ t: 'img', r: box, img: urlM[1], pseudo, s: { fit: 'contain' } });
       } else if (/^["']/.test(content)) {
         const txt = content.slice(1, -1).replace(/\\([0-9a-fA-F]{1,6})\s?/g, (_, h) => String.fromCodePoint(parseInt(h, 16)));
-        if (!txt.trim()) continue;
+        if (!txt.trim()) {
+          // content:"" boxes — active-thumbnail bars, underlines, dots, tint overlays. Needs a size and a fill.
+          const pbg = color(ps.backgroundColor);
+          const pgrad = ps.backgroundImage && ps.backgroundImage.includes('gradient') ? ps.backgroundImage : null;
+          const pbw = [ps.borderTopWidth, ps.borderRightWidth, ps.borderBottomWidth, ps.borderLeftWidth].map(parseFloat);
+          const hasBorder = pbw.some(w => w > 0) && ps.borderTopStyle !== 'none';
+          if (!(isFinite(pw) && pw > 0 && isFinite(ph) && ph > 0) || (!pbg && !pgrad && !hasBorder)) continue;
+          const px = v => { const f = parseFloat(v); return isFinite(f) ? f : null; };
+          let bx = r[0], by = pseudo === '::after' ? r[1] + r[3] - ph : r[1];   // in-flow: ::before leads, ::after trails
+          if (ps.position === 'absolute' || ps.position === 'fixed') {
+            const l = px(ps.left), rt = px(ps.right), t = px(ps.top), b = px(ps.bottom);
+            bx = l !== null ? r[0] + l : rt !== null ? r[0] + r[2] - rt - pw : r[0];
+            by = t !== null ? r[1] + t : b !== null ? r[1] + r[3] - b - ph : r[1];
+            const tm = (ps.transform || '').match(/matrix\(([^)]+)\)/);
+            if (tm) { const v = tm[1].split(',').map(parseFloat); bx += v[4] || 0; by += v[5] || 0; }
+          } else if (pw < r[2]) bx = r[0] + (px(ps.marginLeft) || 0);   // margin:auto resolves to a used px value here
+          const bs = {};
+          if (pbg) bs.bg = pbg; if (pgrad) bs.grad = pgrad;
+          if (hasBorder) { bs.bw = pbw; bs.bc = color(ps.borderTopColor) || color(ps.borderLeftColor); }
+          const pbr = [ps.borderTopLeftRadius, ps.borderTopRightRadius, ps.borderBottomRightRadius, ps.borderBottomLeftRadius].map(parseFloat);
+          if (pbr.some(v => v > 0)) bs.br = pbr;
+          if (parseFloat(ps.opacity) < 1) bs.op = parseFloat(ps.opacity);
+          if (ps.boxShadow && ps.boxShadow !== 'none') bs.sh = ps.boxShadow;
+          (pseudo === '::after' ? afterKids : kids).push({ t: 'div', r: [rnd(bx), rnd(by), rnd(pw), rnd(ph)], pseudo, nm: pseudo, s: bs });
+          continue;
+        }
         if (opts.markForRaster && (PUA.test(txt) || ICON_FONT.test(ps.fontFamily)) && !el.textContent.trim() && el.childElementCount === 0) {
           markShot(el, n); n.glyph = true; continue;   // e.g. Judge.me star spans
         }
