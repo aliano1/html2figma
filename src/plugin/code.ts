@@ -147,6 +147,12 @@ figma.ui.onmessage = async (msg: any) => {
       }
       figma.ui.postMessage({ type: 'status', text: `Captured in ${(data.ms / 1000).toFixed(1)} s (region ${data.region}). Building…` });
       await buildCaptures(data.captures.map((c: any) => c.capture), msg);
+    } else if (msg.type === 'me') {
+      try {
+        const res = await fetch(msg.server.replace(/\/$/, '') + '/me', { headers: msg.apiKey ? { authorization: 'Bearer ' + msg.apiKey } : {} });
+        const data = await res.json().catch(() => ({}));
+        figma.ui.postMessage({ type: 'me', ...(res.ok ? data : { error: data.error || (res.status === 401 ? 'License key not recognised' : `Server returned ${res.status}`) }) });
+      } catch (e: any) { figma.ui.postMessage({ type: 'me', error: 'Cannot reach the capture server' }); }
     } else if (msg.type === 'downloadFonts') {
       // the page's own webfont files, converted to installable TTF/OTF by the server
       const data = await postJson(msg.server, msg.apiKey, '/fonts', { faces: msg.faces });

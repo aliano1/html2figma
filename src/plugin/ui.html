@@ -47,9 +47,11 @@
     <option value="ams">Europe (ams)</option><option value="lhr">UK (lhr)</option>
     <option value="sin">Singapore (sin)</option><option value="syd">Australia (syd)</option>
   </select></div>
-  <details><summary>Server settings</summary>
-    <div class="row"><span>Server URL</span><input id="server" type="text" placeholder="https://your-app.fly.dev"></div>
-    <div class="row"><span>API key</span><input id="apikey" type="password" placeholder="H2F_API_KEY"></div>
+  <div class="row"><span>License key</span><input id="apikey" type="password" placeholder="h2f_live_…"><button id="checkKey" class="secondary" type="button" style="padding:6px 10px">Check</button></div>
+  <div id="plan" class="row" hidden style="margin-top:4px;color:var(--figma-color-text-secondary)"></div>
+  <details><summary>Self-hosted server (advanced)</summary>
+    <div class="row"><span>Server URL</span><input id="server" type="text" placeholder="leave empty for the hosted service"></div>
+    <p style="margin-top:6px">Running your own capture server (see DEPLOY.md)? Put its URL here and use its H2F_API_KEY as the license key.</p>
   </details>
   <div class="row"><button id="capture">Capture &amp; build</button></div>
 </section>
@@ -84,6 +86,8 @@
 <script>
   const $ = id => document.getElementById(id);
   const post = m => parent.postMessage({ pluginMessage: m }, '*');
+  const DEFAULT_SERVER = 'https://html2figma-production-c921.up.railway.app';   // the hosted service; a self-hosted URL overrides it
+  const serverUrl = () => $('server').value.trim() || DEFAULT_SERVER;
   let capture = null;
 
   // tabs
@@ -103,7 +107,7 @@
     const fontMap = {};
     $('fontmap').value.split(',').map(s => s.trim()).filter(Boolean).forEach(pair => { const [a, b] = pair.split('=').map(s => s.trim()); if (a && b) fontMap[a] = b; });
     return { fallbackFont: $('fallback').value.trim() || 'Inter', fontMap, matchWidths: $('matchWidths').checked, reference: $('reference').checked, diff: $('diff').checked,
-             server: $('server').value.trim(), apiKey: $('apikey').value.trim() };
+             server: serverUrl(), apiKey: $('apikey').value.trim() };
   }
   function showFonts(reports) {
     const list = $('fontList'); list.innerHTML = '';
@@ -160,21 +164,30 @@
     const widths = [...document.querySelectorAll('.w:checked')].map(c => +c.value);
     const custom = parseInt($('wcustom').value, 10); if (custom >= 320) widths.push(custom);
     if (!widths.length) { $('status').textContent = 'Pick at least one width.'; return; }
-    if (!$('server').value.trim()) { document.querySelector('#tab-url details').open = true; $('status').textContent = 'Set the capture server URL (see DEPLOY.md).'; return; }
+    if (!$('apikey').value.trim()) { $('status').textContent = 'Enter your license key first.'; $('apikey').focus(); return; }
     saveSettings();
     busy(true, 'Contacting server…');
-    post({ type: 'captureUrl', server: $('server').value.trim(), apiKey: $('apikey').value.trim(), url, widths, region: $('region').value, ...fontOpts() });
+    post({ type: 'captureUrl', server: serverUrl(), apiKey: $('apikey').value.trim(), url, widths, region: $('region').value, ...fontOpts() });
   };
   $('close').onclick = () => post({ type: 'close' });
+  $('checkKey').onclick = () => { saveSettings(); $('plan').hidden = false; $('plan').textContent = 'Checking…'; post({ type: 'me', server: serverUrl(), apiKey: $('apikey').value.trim() }); };
+  function showPlan(m) {
+    $('plan').hidden = false;
+    if (m.error) { $('plan').innerHTML = `<span style="color:var(--figma-color-text-danger)">${m.error}</span>`; return; }
+    if (m.credits === null || m.credits === undefined) { $('plan').textContent = `Connected (${m.plan} key, no metering)`; return; }
+    const pct = Math.min(100, Math.round(100 * m.used / Math.max(1, m.credits)));
+    $('plan').innerHTML = `<b style="color:var(--figma-color-text);font-weight:500">${m.plan[0].toUpperCase() + m.plan.slice(1)}</b> · ${m.remaining} of ${m.credits} credits left this month (1 per width) · resets ${new Date(m.resetsAt).toLocaleDateString()}${pct >= 90 ? ' · <span style="color:var(--figma-color-text-danger)">almost out</span>' : ''}`;
+  }
 
   window.onmessage = e => {
     const m = e.data.pluginMessage; if (!m) return;
-    if (m.type === 'settings') { for (const id of settingIds) if (m.settings[id] !== undefined) $(id).value = m.settings[id]; for (const id of flagIds) if (typeof m.settings[id] === 'boolean') $(id).checked = m.settings[id]; }
+    if (m.type === 'settings') { for (const id of settingIds) if (m.settings[id] !== undefined) $(id).value = m.settings[id]; for (const id of flagIds) if (typeof m.settings[id] === 'boolean') $(id).checked = m.settings[id]; if ($('apikey').value.trim()) post({ type: 'me', server: serverUrl(), apiKey: $('apikey').value.trim(), quiet: true }); }
     if (m.type === 'status') { $('status').textContent = m.text; if (/Building/.test(m.text)) { $('stage').hidden = true; clearInterval(tick); tick = null; $('bar').classList.remove('busy'); $('bar').value = 0; } }
     if (m.type === 'capture') showCapture(m);
     if (m.type === 'progress') { $('bar').value = m.done / m.total; $('status').textContent = `Building ${m.count > 1 ? (m.index + 1) + '/' + m.count + ' ' : ''}… ${m.done}/${m.total} layers`; }
-    if (m.type === 'done') { $('bar').value = 1; busy(false, `Done in ${m.seconds}s → ${m.name}${m.scores && m.scores.length ? ' · match: ' + m.scores.join(', ') : ''}`); $('bar').hidden = false; }
+    if (m.type === 'done') { $('bar').value = 1; busy(false, `Done in ${m.seconds}s → ${m.name}${m.scores && m.scores.length ? ' · match: ' + m.scores.join(', ') : ''}`); $('bar').hidden = false; if ($('apikey').value.trim()) post({ type: 'me', server: serverUrl(), apiKey: $('apikey').value.trim(), quiet: true }); }
     if (m.type === 'fonts') showFonts(m.reports);
+    if (m.type === 'me') showPlan(m);
     if (m.type === 'fontFiles') { saveFiles(m.files); const errs = m.files.filter(f => f.error); $('status').textContent = `${m.files.length - errs.length} font file(s) for ${m.family} downloaded${errs.length ? '; failed: ' + errs.map(f => f.file + ' (' + f.error + ')').join(', ') : ''}. Install them, restart Figma, build again.`; document.querySelectorAll('#fontList button').forEach(b => { b.disabled = false; b.textContent = 'Download again'; }); }
     if (m.type === 'error') busy(false, 'Error: ' + m.message);
   };

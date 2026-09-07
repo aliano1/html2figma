@@ -9,8 +9,11 @@
  *   POST /diff      { reference: dataURL, candidate: dataURL, cell? } → { similarity, diff: dataURL, regions: [{x,y,w,h,pct}] }
  *   GET  /healthz   → { ok, region, browser, features }
  *
- * Auth: `Authorization: Bearer <H2F_API_KEY>` (or `x-api-key`). If H2F_API_KEY is unset the
- * server refuses to start unless H2F_ALLOW_ANON=1 (local dev only).
+ *   GET  /me        → { email, plan, credits, used, remaining, resetsAt } (license-key users)
+ *
+ * Auth: `Authorization: Bearer …`. Single-tenant: the shared H2F_API_KEY. Multi-tenant (DATABASE_URL
+ * set): per-user license keys `h2f_live_…` with plans, monthly credits and a Postgres job queue — see
+ * db.mjs and scripts/h2f-admin.mjs. Without either, the server refuses to start unless H2F_ALLOW_ANON=1.
  *
  * Region routing (Fly.io): if `region` is given and differs from FLY_REGION, the request is
  * replayed in that region via the `fly-replay` header. On other hosts the field is ignored.
@@ -24,6 +27,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { chromium } from 'playwright';
+import { Db } from './db.mjs';
+import { assertPublicUrl, guardContext } from './safety.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORE = readFileSync(join(__dirname, '..', 'dist', 'core.iife.js'), 'utf8');
@@ -31,11 +36,12 @@ const PORT = Number(process.env.PORT || 8080);
 const API_KEY = process.env.H2F_API_KEY || '';
 const REGION = process.env.FLY_REGION || process.env.RAILWAY_REPLICA_REGION || process.env.H2F_REGION || 'local';
 const MAX_WIDTHS = 4;
+const MAX_CAPTURE_BYTES = Number(process.env.H2F_MAX_CAPTURE_MB || 60) * 1e6;
 const DEFAULT_HIDE = ['#shopify-pc__banner', '.shopify-pc__banner', '#onetrust-consent-sdk', '#CybotCookiebotDialog', '.cc-window', '#cookie-banner', '[id*="cookie-consent"]', '[class*="cookie-consent"]', '.sca-modal-fg', '.freegifts-main-container'];
 const MOBILE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
 
-if (!API_KEY && process.env.H2F_ALLOW_ANON !== '1') {
-  console.error('Refusing to start: set H2F_API_KEY (or H2F_ALLOW_ANON=1 for local dev).');
+if (!API_KEY && !process.env.DATABASE_URL && process.env.H2F_ALLOW_ANON !== '1') {
+  console.error('Refusing to start: set H2F_API_KEY (single-tenant), DATABASE_URL (license keys), or H2F_ALLOW_ANON=1 for local dev.');
   process.exit(1);
 }
 
@@ -75,6 +81,7 @@ async function captureViewport(b, opts, width, report = () => {}) {
     extraHTTPHeaders: opts.headers || {},
   });
   if (opts.cookies) await ctx.addCookies(opts.cookies);
+  await guardContext(ctx);   // no hops into private networks, whatever the page redirects to
   const page = await ctx.newPage();
   page.setDefaultTimeout(opts.timeoutMs);
   try {
@@ -118,32 +125,13 @@ async function captureViewport(b, opts, width, report = () => {}) {
       if (png) capture.screenshot = 'data:image/jpeg;base64,' + png.toString('base64');
     }
 
+    const bytes = JSON.stringify(capture).length;
+    if (bytes > MAX_CAPTURE_BYTES) throw new Error(`page too large to import (${(bytes / 1e6).toFixed(0)} MB of layers and images; limit ${MAX_CAPTURE_BYTES / 1e6} MB)`);
     report('done', 1, 'Done');
     return { viewport: capture.viewport, capture };
   } finally {
     await ctx.close().catch(() => {});
   }
-}
-
-// ---------- jobs (async captures: the plugin polls for progress instead of holding one long request) ----------
-const jobs = new Map();
-const JOB_TTL = 10 * 60 * 1000;
-function newJob(widths) {
-  const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-  const job = { id, status: 'queued', widths, widthIndex: 0, stage: 'queued', progress: 0, message: 'Waiting for a browser', startedAt: Date.now(), result: null, error: null };
-  jobs.set(id, job);
-  setTimeout(() => jobs.delete(id), JOB_TTL).unref();
-  return job;
-}
-async function runCapture(opts, widths, job) {
-  const b = await browser();
-  const captures = [];
-  for (let i = 0; i < widths.length; i++) {
-    const w = widths[i];
-    const report = (stage, frac, message) => { if (!job) return; job.status = 'running'; job.widthIndex = i; job.stage = stage; job.message = `${w}px · ${message}`; job.progress = (i + frac) / widths.length; };
-    captures.push(await captureViewport(b, opts, w, report));   // sequential: predictable memory
-  }
-  return captures;
 }
 
 // CDN resize hints (Shopify `?width=72`, `_64x64.`, Cloudinary `w_72`): ask for 2x the displayed size so
@@ -269,6 +257,69 @@ async function diffImages(b, a, bImg, cell) {
     }, { a, bImg, cell });
   } finally { await ctx.close().catch(() => {}); }
 }
+// ---------- jobs ----------
+// Two modes share one shape:
+//   single-tenant (no DATABASE_URL): in-memory jobs, one shared H2F_API_KEY — the self-hosted setup.
+//   multi-tenant  (DATABASE_URL set): license keys, monthly credits, per-plan concurrency, a Postgres
+//   queue that any replica can pull from, usage rows for billing.
+const db = process.env.DATABASE_URL ? new Db(process.env.DATABASE_URL) : null;
+const WORKER_ID = `${REGION}-${process.pid}-${Math.random().toString(36).slice(2, 6)}`;
+const memJobs = new Map();
+const JOB_TTL = 10 * 60 * 1000;
+const newJobId = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+
+function memJob(widths) {
+  const job = { id: newJobId(), status: 'queued', widths, widthIndex: 0, stage: 'queued', progress: 0, message: 'Waiting for a browser', startedAt: Date.now(), result: null, error: null };
+  memJobs.set(job.id, job);
+  setTimeout(() => memJobs.delete(job.id), JOB_TTL).unref();
+  return job;
+}
+
+async function runCapture(opts, widths, report) {
+  const b = await browser();
+  const captures = [];
+  for (let i = 0; i < widths.length; i++) {
+    const w = widths[i];
+    const rep = (stage, frac, message) => report && report({ stage, message: `${w}px · ${message}`, progress: (i + frac) / widths.length, widthIndex: i });
+    captures.push(await captureViewport(b, opts, w, rep));   // sequential: predictable memory
+  }
+  return captures;
+}
+const friendly = e => { const msg = String(e.message || e); return /Target crashed|Target closed|out of memory/i.test(msg)
+  ? 'Browser tab crashed (usually out of memory). Give the service more RAM or capture one width at a time.'
+  : msg.slice(0, 300); };
+
+let inflight = 0;
+const MAX_INFLIGHT = Number(process.env.H2F_MAX_INFLIGHT || 2);
+
+// multi-tenant worker: pull queued jobs from Postgres while there is capacity
+async function workerTick() {
+  if (!db || inflight >= MAX_INFLIGHT) return;
+  let job; try { job = await db.claim(WORKER_ID); } catch (e) { console.error('claim failed', e.message); return; }
+  if (!job) return;
+  inflight++;
+  const t0 = Date.now();
+  const req = job.request;
+  let lastWrite = 0, pending = null;
+  const report = p => {   // throttle progress writes to ~3/s
+    pending = p; const now = Date.now();
+    if (now - lastWrite > 300) { lastWrite = now; db.progress(job.id, p).catch(() => {}); pending = null; }
+  };
+  try {
+    const captures = await runCapture(req.opts, req.widths, report);
+    const result = { url: req.opts.url, title: captures[0].capture.title, region: REGION, ms: Date.now() - t0, captures };
+    await db.finish(job.id, result);
+    await db.recordUsage({ accountId: job.account_id, keyHash: job.key_hash, url: req.opts.url, widths: req.widths, credits: req.widths.length, ms: Date.now() - t0, status: 'done', region: REGION });
+  } catch (e) {
+    console.error('capture failed', req.opts.url, e);
+    await db.fail(job.id, friendly(e)).catch(() => {});
+    await db.recordUsage({ accountId: job.account_id, keyHash: job.key_hash, url: req.opts.url, widths: req.widths, credits: 0, ms: Date.now() - t0, status: 'error', error: friendly(e), region: REGION }).catch(() => {});
+  } finally { inflight--; void pending; }
+}
+if (db) {
+  setInterval(() => { workerTick().catch(e => console.error('worker', e)); }, 500).unref();
+  setInterval(() => { db.sweep().catch(() => {}); }, 60_000).unref();
+}
 
 // ---------- HTTP ----------
 function json(res, status, body, headers = {}) {
@@ -283,87 +334,124 @@ function readBody(req, limit = 1e6) {
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8'))); req.on('error', reject);
   });
 }
-function authed(req) {
-  if (!API_KEY) return true;
+function bearer(req) {
   const h = req.headers['authorization'] || '';
-  return h === `Bearer ${API_KEY}` || req.headers['x-api-key'] === API_KEY;
+  return h.startsWith('Bearer ') ? h.slice(7).trim() : (req.headers['x-api-key'] || '').trim();
 }
-
-let inflight = 0;
-const MAX_INFLIGHT = Number(process.env.H2F_MAX_INFLIGHT || 2);
+/** → { kind: 'admin' | 'anon' | 'user', account?, keyHash? } or null when unauthorised */
+async function authenticate(req) {
+  const key = bearer(req);
+  if (API_KEY && key === API_KEY) return { kind: 'admin' };
+  if (db && key.startsWith('h2f_')) { const a = await db.authenticate(key); return a ? { kind: 'user', ...a } : null; }
+  if (!API_KEY && !db) return { kind: 'anon' };
+  return null;
+}
+const jobView = (j, elapsedMs) => ({ id: j.id, status: j.status, stage: j.stage, message: j.message, progress: j.progress, widthIndex: j.widthIndex ?? j.width_index, elapsedMs, error: j.error || null });
 
 const server = http.createServer(async (req, res) => {
-  if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization, x-api-key, content-type', 'access-control-allow-methods': 'POST, GET, OPTIONS' }); return res.end(); }
-  if (req.url === '/healthz') return json(res, 200, { ok: true, region: REGION, browser: browserName || null, inflight, features: ['screenshot', 'fonts', 'diff', 'jobs'] });
-  const jobM = req.method === 'GET' && req.url.match(/^\/jobs\/([a-z0-9]+)$/);
-  if (jobM) {
-    if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
-    const job = jobs.get(jobM[1]);
-    if (!job) return json(res, 404, { error: 'unknown or expired job' });
-    const { result, ...status } = job;
-    status.elapsedMs = Date.now() - job.startedAt;
-    if (job.status === 'done') { jobs.delete(job.id); return json(res, 200, { ...status, result }); }   // one-shot: the result is large
-    return json(res, 200, status);
-  }
-  if (req.method !== 'POST' || !['/capture', '/fonts', '/diff'].includes(req.url)) return json(res, 404, { error: 'not found' });
-  if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+  try {
+    if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization, x-api-key, content-type', 'access-control-allow-methods': 'POST, GET, OPTIONS' }); return res.end(); }
+    if (req.url === '/healthz') return json(res, 200, { ok: true, region: REGION, browser: browserName || null, inflight, mode: db ? 'multi-tenant' : 'single-tenant', features: ['screenshot', 'fonts', 'diff', 'jobs', ...(db ? ['accounts'] : [])] });
 
-  let body;
-  try { body = JSON.parse(await readBody(req, req.url === '/diff' ? 80e6 : 1e6) || '{}'); } catch (e) { return json(res, 400, { error: /large/.test(String(e.message)) ? 'body too large' : 'invalid JSON' }); }
+    const auth = await authenticate(req);
+    if (!auth) return json(res, 401, { error: db ? 'invalid or revoked license key' : 'unauthorized' });
 
-  if (req.url === '/fonts') {
-    // { faces: [{family, weight, style, url, file}] } → { files: [{family, weight, style, name, data(base64)}] }
-    const faces = (Array.isArray(body.faces) ? body.faces : []).filter(f => f && /^https?:\/\//.test(String(f.url || '')));
-    if (!faces.length) return json(res, 400, { error: 'no font faces given' });
-    try {
+    // ---- GET /me: plan + credits for the plugin panel ----
+    if (req.method === 'GET' && req.url === '/me') {
+      if (auth.kind !== 'user') return json(res, 200, { plan: auth.kind, credits: null, used: 0, remaining: null });
+      return json(res, 200, { email: auth.account.email, ...(await db.quota(auth.account)) });
+    }
+
+    // ---- GET /jobs/:id ----
+    const jobM = req.method === 'GET' && req.url.match(/^\/jobs\/([a-z0-9]+)$/);
+    if (jobM) {
+      if (db) {
+        const j = await db.get(jobM[1], auth.kind === 'user' ? auth.account.id : null);
+        if (!j) return json(res, 404, { error: 'unknown or expired job' });
+        const elapsedMs = Date.now() - new Date(j.created_at).getTime();
+        if (j.status === 'done') { await db.remove(j.id); return json(res, 200, { ...jobView(j, elapsedMs), result: j.result }); }   // one-shot
+        return json(res, 200, jobView(j, elapsedMs));
+      }
+      const job = memJobs.get(jobM[1]);
+      if (!job) return json(res, 404, { error: 'unknown or expired job' });
+      const elapsedMs = Date.now() - job.startedAt;
+      if (job.status === 'done') { memJobs.delete(job.id); return json(res, 200, { ...jobView(job, elapsedMs), result: job.result }); }
+      return json(res, 200, jobView(job, elapsedMs));
+    }
+
+    if (req.method !== 'POST' || !['/capture', '/fonts', '/diff'].includes(req.url)) return json(res, 404, { error: 'not found' });
+    let body;
+    try { body = JSON.parse(await readBody(req, req.url === '/diff' ? 80e6 : 1e6) || '{}'); } catch (e) { return json(res, 400, { error: /large/.test(String(e.message)) ? 'body too large' : 'invalid JSON' }); }
+
+    if (req.url === '/fonts') {
+      const faces = (Array.isArray(body.faces) ? body.faces : []).filter(f => f && /^https?:\/\//.test(String(f.url || '')));
+      if (!faces.length) return json(res, 400, { error: 'no font faces given' });
+      for (const f of faces) await assertPublicUrl(f.url);
       const b = await browser(); const ctx = await b.newContext();
       try { return json(res, 200, { files: await fontFiles(ctx, faces) }); } finally { await ctx.close().catch(() => {}); }
-    } catch (e) { return json(res, 500, { error: String(e.message || e).slice(0, 300) }); }
-  }
-  if (req.url === '/diff') {
-    // { reference: dataURL, candidate: dataURL, cell?: 24 } → { similarity, diff (png dataURL), regions[] }
-    if (!/^data:image\//.test(String(body.reference || '')) || !/^data:image\//.test(String(body.candidate || ''))) return json(res, 400, { error: 'reference and candidate must be image data URLs' });
-    try { const b = await browser(); return json(res, 200, await diffImages(b, body.reference, body.candidate, Math.max(8, Math.min(200, Number(body.cell) || 24)))); }
-    catch (e) { return json(res, 500, { error: String(e.message || e).slice(0, 300) }); }
-  }
-  const url = String(body.url || '');
-  if (!/^https?:\/\//.test(url)) return json(res, 400, { error: 'url must be http(s)' });
-  const widths = (Array.isArray(body.widths) && body.widths.length ? body.widths : [1920]).map(Number).filter(w => w >= 320 && w <= 3840).slice(0, MAX_WIDTHS);
-  if (!widths.length) return json(res, 400, { error: 'no valid widths (320–3840)' });
+    }
+    if (req.url === '/diff') {
+      if (!/^data:image\//.test(String(body.reference || '')) || !/^data:image\//.test(String(body.candidate || ''))) return json(res, 400, { error: 'reference and candidate must be image data URLs' });
+      const b = await browser(); return json(res, 200, await diffImages(b, body.reference, body.candidate, Math.max(8, Math.min(200, Number(body.cell) || 24))));
+    }
 
-  // Fly.io: run in the requested region
-  if (body.region && process.env.FLY_REGION && body.region !== process.env.FLY_REGION) {
-    res.writeHead(200, { 'fly-replay': `region=${body.region}` }); return res.end();
-  }
-  if (inflight >= MAX_INFLIGHT) return json(res, 429, { error: 'busy, retry shortly' });
-  const opts = { url, hideSelectors: body.hideSelectors, waitFor: body.waitFor, timeoutMs: Math.min(Number(body.timeoutMs) || 45000, 120000), locale: body.locale, timezone: body.timezone, headers: body.headers, cookies: body.cookies, screenshot: !!body.screenshot };
-  const friendly = e => { const msg = String(e.message || e); return /Target crashed|Target closed|out of memory/i.test(msg)
-    ? 'Browser tab crashed (usually out of memory). Give the service more RAM (Railway: Hobby plan; Fly: memory = "2gb") or capture one width at a time.'
-    : msg.slice(0, 300); };
+    // ---- POST /capture ----
+    const url = String(body.url || '');
+    try { await assertPublicUrl(url); } catch (e) { return json(res, 400, { error: e.message }); }
+    let widths = (Array.isArray(body.widths) && body.widths.length ? body.widths : [1920]).map(Number).filter(w => w >= 320 && w <= 3840).slice(0, MAX_WIDTHS);
+    if (!widths.length) return json(res, 400, { error: 'no valid widths (320–3840)' });
+    if (body.region && process.env.FLY_REGION && body.region !== process.env.FLY_REGION) { res.writeHead(200, { 'fly-replay': `region=${body.region}` }); return res.end(); }
+    const opts = { url, hideSelectors: body.hideSelectors, waitFor: body.waitFor, timeoutMs: Math.min(Number(body.timeoutMs) || 45000, 120000), locale: body.locale, timezone: body.timezone, headers: body.headers, cookies: body.cookies, screenshot: !!body.screenshot };
 
-  // async mode: answer at once with a job id; the client polls GET /jobs/:id for stage + progress, then gets the result
-  if (body.async) {
-    const job = newJob(widths);
+    if (auth.kind === 'user') {
+      // plan limits: widths per capture, monthly credits, concurrent jobs, burst rate
+      const q = await db.quota(auth.account);
+      if (widths.length > q.widthsPerCapture) return json(res, 400, { error: `your plan allows ${q.widthsPerCapture} width${q.widthsPerCapture === 1 ? '' : 's'} per capture` });
+      if (q.remaining < widths.length) return json(res, 402, { error: `not enough credits: ${q.remaining} left this month, ${widths.length} needed (resets ${q.resetsAt.slice(0, 10)})`, quota: q });
+      if ((await db.activeJobs(auth.account.id)) >= q.concurrency) return json(res, 429, { error: 'a capture is already running on your account — wait for it to finish' });
+      if ((await db.recentRequests(auth.keyHash, 60)) >= 10) return json(res, 429, { error: 'too many captures per minute' });
+      const id = newJobId();
+      await db.enqueue({ id, accountId: auth.account.id, keyHash: auth.keyHash, request: { opts, widths } });
+      if (body.async) return json(res, 202, { jobId: id, poll: `/jobs/${id}`, quota: { ...q, remaining: q.remaining - widths.length } });
+      // sync callers: wait for the worker
+      for (let i = 0; i < 600; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        const j = await db.get(id, auth.account.id);
+        if (!j) return json(res, 500, { error: 'job vanished' });
+        if (j.status === 'done') { await db.remove(id); return json(res, 200, j.result); }
+        if (j.status === 'error') return json(res, 500, { error: j.error });
+      }
+      return json(res, 504, { error: 'capture timed out' });
+    }
+
+    // admin / anon / single-tenant: run here
+    if (inflight >= MAX_INFLIGHT) return json(res, 429, { error: 'busy, retry shortly' });
+    if (body.async) {
+      const job = memJob(widths);
+      inflight++;
+      const t0 = Date.now();
+      runCapture(opts, widths, p => { job.status = 'running'; Object.assign(job, p); })
+        .then(captures => { job.result = { url, title: captures[0].capture.title, region: REGION, ms: Date.now() - t0, captures }; job.status = 'done'; job.progress = 1; job.message = 'Done'; })
+        .catch(e => { console.error('capture failed', url, e); job.status = 'error'; job.error = friendly(e); })
+        .finally(() => { inflight--; });
+      return json(res, 202, { jobId: job.id, poll: `/jobs/${job.id}` });
+    }
     inflight++;
     const t0 = Date.now();
-    runCapture(opts, widths, job)
-      .then(captures => { job.result = { url, title: captures[0].capture.title, region: REGION, ms: Date.now() - t0, captures }; job.status = 'done'; job.progress = 1; job.message = 'Done'; })
-      .catch(e => { console.error('capture failed', url, e); job.status = 'error'; job.error = friendly(e); })
-      .finally(() => { inflight--; });
-    return json(res, 202, { jobId: job.id, poll: `/jobs/${job.id}` });
-  }
-
-  inflight++;
-  const t0 = Date.now();
-  try {
-    const captures = await runCapture(opts, widths, null);
-    json(res, 200, { url, title: captures[0].capture.title, region: REGION, ms: Date.now() - t0, captures });
+    try {
+      const captures = await runCapture(opts, widths, null);
+      json(res, 200, { url, title: captures[0].capture.title, region: REGION, ms: Date.now() - t0, captures });
+    } catch (e) { console.error('capture failed', url, e); json(res, 500, { error: friendly(e) }); }
+    finally { inflight--; }
   } catch (e) {
-    console.error('capture failed', url, e);
-    json(res, 500, { error: friendly(e) });
-  } finally { inflight--; }
+    console.error('request failed', req.url, e);
+    if (!res.headersSent) json(res, 500, { error: String(e.message || e).slice(0, 300) });
+  }
 });
 
-server.listen(PORT, () => console.log(`html2figma capture server on :${PORT} (region ${REGION}, auth ${API_KEY ? 'on' : 'OFF'})`));
-browser().catch(e => console.error('browser launch failed', e));
-process.on('SIGTERM', async () => { try { (await browserP)?.close(); } catch {} process.exit(0); });
+(async () => {
+  if (db) { await db.migrate(); console.log('database ready (multi-tenant mode)'); }
+  server.listen(PORT, () => console.log(`html2figma capture server on :${PORT} (region ${REGION}, ${db ? 'license keys' : API_KEY ? 'shared key' : 'NO AUTH'})`));
+  browser().catch(e => console.error('browser launch failed', e));
+})().catch(e => { console.error('startup failed', e); process.exit(1); });
+process.on('SIGTERM', async () => { try { (await browserP)?.close(); } catch {} try { await db?.close(); } catch {} process.exit(0); });

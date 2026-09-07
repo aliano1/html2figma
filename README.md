@@ -16,7 +16,7 @@ src/plugin/ui.html       plugin panel
 
 Two ways to capture:
 
-- **From URL** (plugin → server): type a URL, tick 1920 / 390 / custom, pick a region, click. The server renders in a US or EU datacenter, so you get that region's prices and CTAs; video frames and icon-font glyphs come back as images. See **DEPLOY.md** to host it on Railway or Fly.io.
+- **From URL** (plugin → server): enter your license key, type a URL, tick 1920 / 390 / custom, click. The server renders in a real browser, so you get video frames, icon-font glyphs, the page's fonts and a reference screenshot back. See **DEPLOY.md** to host it on Railway or Fly.io — single-tenant with one shared key, or multi-tenant with license keys, monthly credits and usage metering (Postgres).
 - **Bookmarklet** (your browser → plugin): captures exactly what you see — your login, your region, dismissed popups. No server, nothing leaves your machine. Can't grab cross-origin video frames or resize the viewport for you.
 
 ## Setup (once)

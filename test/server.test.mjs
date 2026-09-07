@@ -12,7 +12,7 @@ const srv = http.createServer((q, r) => {
   catch { r.statusCode = 404; r.end(); }
 }).listen(8099);
 
-const proc = spawn('node', ['server/index.mjs'], { env: { ...process.env, PORT: '8123', H2F_ALLOW_ANON: '1' }, stdio: ['ignore', 'inherit', 'inherit'] });
+const proc = spawn('node', ['server/index.mjs'], { env: { ...process.env, PORT: '8123', H2F_ALLOW_ANON: '1', H2F_ALLOW_PRIVATE: '1' }, stdio: ['ignore', 'inherit', 'inherit'] });
 await new Promise(r => setTimeout(r, 1500));
 for (let i = 0; i < 20; i++) { try { const h = await fetch('http://127.0.0.1:8123/healthz'); if (h.ok) break; } catch {} await new Promise(r => setTimeout(r, 500)); }
 

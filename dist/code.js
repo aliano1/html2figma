@@ -710,6 +710,14 @@
         }
         figma.ui.postMessage({ type: "status", text: `Captured in ${(data.ms / 1e3).toFixed(1)} s (region ${data.region}). Building\u2026` });
         await buildCaptures(data.captures.map((c) => c.capture), msg);
+      } else if (msg.type === "me") {
+        try {
+          const res = await fetch(msg.server.replace(/\/$/, "") + "/me", { headers: msg.apiKey ? { authorization: "Bearer " + msg.apiKey } : {} });
+          const data = await res.json().catch(() => ({}));
+          figma.ui.postMessage({ type: "me", ...res.ok ? data : { error: data.error || (res.status === 401 ? "License key not recognised" : `Server returned ${res.status}`) } });
+        } catch (e) {
+          figma.ui.postMessage({ type: "me", error: "Cannot reach the capture server" });
+        }
       } else if (msg.type === "downloadFonts") {
         const data = await postJson(msg.server, msg.apiKey, "/fonts", { faces: msg.faces });
         figma.ui.postMessage({ type: "fontFiles", family: msg.family, files: data.files });
