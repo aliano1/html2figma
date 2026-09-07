@@ -66,6 +66,12 @@ check(fontReport && fontReport.some(f => f.family === 'Komet' && !f.installed &&
   const tint = root.findAll(n => n.type === 'FRAME' && n.name.includes('::before') && Math.abs(n.width - 120) < 0.6 && Math.abs(n.height - 60) < 0.6)[0];
   check(!!tint && tint.fills[0] && tint.fills[0].opacity > 0.35 && tint.fills[0].opacity < 0.45 && tint.topLeftRadius === 8, `absolute inset:0 overlay pseudo captured with its alpha and radius (${tint ? `opacity ${tint.fills[0].opacity}, radius ${tint.topLeftRadius}` : 'missing'})`);
 }
+{
+  const plus = root.findAll(n => n.type === 'FRAME' && /plus/.test(n.name))[0];
+  const strokes = plus ? plus.children.filter(c => c.name.includes('::')) : [];
+  const horiz = strokes.find(c => c.width > c.height), vert = strokes.find(c => c.height > c.width);
+  check(!!horiz && !!vert && Math.abs(vert.width - 2) < 0.6 && Math.abs(vert.height - 14) < 0.6 && Math.abs((horiz.x + horiz.width / 2) - (vert.x + vert.width / 2)) < 0.6 && Math.abs((horiz.y + horiz.height / 2) - (vert.y + vert.height / 2)) < 0.6, `CSS "+" icon: rotated ::after becomes the vertical stroke, centred on the horizontal one (${strokes.map(c => `${c.width}×${c.height}@${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' / ')})`);
+}
 const lbl = byChars('Add to cart')[0];
 if (lbl) { const btn = (function up(n) { return n.name.includes('flexbtn') ? n : n.parent && n.parent.type !== 'PAGE' ? up(n.parent) : null; })(lbl); const [lx] = abs(lbl), [bx] = abs(btn); const gapL = lx - bx, gapR = bx + btn.width - (lx + lbl.width); check(Math.abs(gapL - gapR) < 2, `flex-centred label stays centred (gaps ${gapL.toFixed(1)} / ${gapR.toFixed(1)})`); }
 check(root.findAll(n => n.type === 'RECTANGLE' && n.name === 'image' && n.fills[0] && n.fills[0].type === 'IMAGE').length === 3, 'inlined images became IMAGE fills (card photo + 2 thumbnails)');

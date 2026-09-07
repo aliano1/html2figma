@@ -216,9 +216,17 @@ export function extract(options = {}) {
             const l = px(ps.left), rt = px(ps.right), t = px(ps.top), b = px(ps.bottom);
             bx = l !== null ? r[0] + l : rt !== null ? r[0] + r[2] - rt - pw : r[0];
             by = t !== null ? r[1] + t : b !== null ? r[1] + r[3] - b - ph : r[1];
-            const tm = (ps.transform || '').match(/matrix\(([^)]+)\)/);
-            if (tm) { const v = tm[1].split(',').map(parseFloat); bx += v[4] || 0; by += v[5] || 0; }
           } else if (pw < r[2]) bx = r[0] + (px(ps.marginLeft) || 0);   // margin:auto resolves to a used px value here
+          let bw2 = pw, bh2 = ph;
+          const tm = (ps.transform || '').match(/matrix\(([^)]+)\)/);
+          if (tm) {
+            const v = tm[1].split(',').map(parseFloat);
+            bx += v[4] || 0; by += v[5] || 0;
+            // quarter-turn (the vertical stroke of a CSS "+" icon, rotated chevrons): swap the box around its centre
+            if (Math.abs(v[0]) < 0.05 && Math.abs(v[3]) < 0.05 && Math.abs(Math.abs(v[1]) - 1) < 0.05) {
+              const cx = bx + pw / 2, cy = by + ph / 2; bw2 = ph; bh2 = pw; bx = cx - bw2 / 2; by = cy - bh2 / 2;
+            }
+          }
           const bs = {};
           if (pbg) bs.bg = pbg; if (pgrad) bs.grad = pgrad;
           if (hasBorder) { bs.bw = pbw; bs.bc = color(ps.borderTopColor) || color(ps.borderLeftColor); }
@@ -226,7 +234,7 @@ export function extract(options = {}) {
           if (pbr.some(v => v > 0)) bs.br = pbr;
           if (parseFloat(ps.opacity) < 1) bs.op = parseFloat(ps.opacity);
           if (ps.boxShadow && ps.boxShadow !== 'none') bs.sh = ps.boxShadow;
-          (pseudo === '::after' ? afterKids : kids).push({ t: 'div', r: [rnd(bx), rnd(by), rnd(pw), rnd(ph)], pseudo, nm: pseudo, s: bs });
+          (pseudo === '::after' ? afterKids : kids).push({ t: 'div', r: [rnd(bx), rnd(by), rnd(bw2), rnd(bh2)], pseudo, nm: pseudo, s: bs });
           continue;
         }
         if (opts.markForRaster && (PUA.test(txt) || ICON_FONT.test(ps.fontFamily)) && !el.textContent.trim() && el.childElementCount === 0) {
