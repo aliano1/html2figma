@@ -1,7 +1,7 @@
 /// <reference types="@figma/plugin-typings" />
-import { build, Capture } from './builder';
+import { build, Capture, FontReport } from './builder';
 
-figma.showUI(__html__, { width: 380, height: 520, themeColors: true });
+figma.showUI(__html__, { width: 400, height: 600, themeColors: true });
 
 async function fetchImage(url: string): Promise<Uint8Array | null> {
   try {
@@ -17,10 +17,39 @@ function findFreeSpot(): { x: number; y: number } {
   return { x: x ? x + 200 : 0, y: 0 };
 }
 
+const GAP = 120;
+
+function imageFrame(dataUrl: string, w: number, h: number, name: string): RectangleNode | null {
+  try {
+    const bytes = figma.base64Decode(dataUrl.slice(dataUrl.indexOf(',') + 1));
+    const img = figma.createImage(bytes);
+    const r = figma.createRectangle();
+    r.resize(Math.max(w, 1), Math.max(h, 1));
+    r.fills = [{ type: 'IMAGE', imageHash: img.hash, scaleMode: 'FILL' }];
+    r.name = name;
+    return r;
+  } catch (_) { return null; }
+}
+
+async function postJson(server: string, apiKey: string, path: string, body: any): Promise<any> {
+  const res = await fetch(server.replace(/\/$/, '') + path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(apiKey ? { authorization: 'Bearer ' + apiKey } : {}) },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let data: any; try { data = JSON.parse(text); } catch { throw new Error(`Server returned ${res.status}: ${text.slice(0, 200)}`); }
+  if (!res.ok) throw new Error(data.error || `Server returned ${res.status}`);
+  return data;
+}
+
 async function buildCaptures(captures: Capture[], msg: any) {
   const t0 = Date.now();
   const spot = findFreeSpot();
+  const all: SceneNode[] = [];
   const roots: FrameNode[] = [];
+  const reports: { viewport: number; fonts: FontReport[] }[] = [];
+  const scores: string[] = [];
   let x = spot.x;
   for (let i = 0; i < captures.length; i++) {
     const cap = captures[i];
@@ -28,27 +57,55 @@ async function buildCaptures(captures: Capture[], msg: any) {
       x, y: spot.y,
       fallbackFont: msg.fallbackFont || 'Inter',
       fontMap: msg.fontMap || {},
+      matchWidths: msg.matchWidths !== false,
       fetchImage,
       onProgress: (done, total) => figma.ui.postMessage({ type: 'progress', done, total, index: i, count: captures.length }),
+      onFonts: r => reports.push({ viewport: cap.viewport[0], fonts: r }),
     });
-    roots.push(root);
-    x += root.width + 200;
+    roots.push(root); all.push(root);
+    x += root.width + GAP;
+
+    // reference screenshot beside the build (+ a hidden 50 % overlay inside it for eyeballing)
+    if (cap.screenshot && msg.reference !== false) {
+      const ref = imageFrame(cap.screenshot, root.width, root.height, `reference · ${cap.viewport[0]}w (page screenshot)`);
+      if (ref) {
+        figma.currentPage.appendChild(ref); ref.x = x; ref.y = spot.y; ref.locked = true; all.push(ref);
+        x += ref.width + GAP;
+        const ov = imageFrame(cap.screenshot, root.width, root.height, 'reference overlay — toggle visibility to compare');
+        if (ov) { root.appendChild(ov); ov.x = 0; ov.y = 0; ov.opacity = 0.5; ov.locked = true; ov.visible = false; }
+      }
+    }
+
+    // fidelity score: export the build and let the server diff it against the screenshot
+    if (cap.screenshot && msg.diff && msg.server) {
+      try {
+        figma.ui.postMessage({ type: 'status', text: `Comparing ${cap.viewport[0]}w build with the screenshot…` });
+        const png = await root.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 1 } });
+        const d = await postJson(msg.server, msg.apiKey, '/diff', { reference: cap.screenshot, candidate: 'data:image/png;base64,' + figma.base64Encode(png), cell: 24 });
+        const pct = Math.round(d.similarity * 1000) / 10;
+        const diff = imageFrame(d.diff, root.width, root.height, `diff · ${cap.viewport[0]}w · ${pct}% match (red = differs)`);
+        if (diff) { figma.currentPage.appendChild(diff); diff.x = x; diff.y = spot.y; diff.locked = true; all.push(diff); x += diff.width + GAP; }
+        root.setSharedPluginData('html2figma', 'fidelity', JSON.stringify({ similarity: d.similarity, regions: d.regions.slice(0, 50) }));
+        scores.push(`${cap.viewport[0]}w ${pct}%`);
+      } catch (e: any) { scores.push(`${cap.viewport[0]}w diff failed: ${e && e.message ? e.message : e}`); }
+    }
   }
-  if (roots.length > 1) {
+  if (all.length > 1) {
     const sec = figma.createSection();
     sec.name = `${captures[0].title || captures[0].url} — ${captures.map(c => c.viewport[0] + 'w').join(' + ')}`;
-    const minX = Math.min(...roots.map(r => r.x)), minY = Math.min(...roots.map(r => r.y));
-    const maxX = Math.max(...roots.map(r => r.x + r.width)), maxY = Math.max(...roots.map(r => r.y + r.height));
+    const minX = Math.min(...all.map(r => r.x)), minY = Math.min(...all.map(r => r.y));
+    const maxX = Math.max(...all.map(r => r.x + r.width)), maxY = Math.max(...all.map(r => r.y + r.height));
     sec.x = minX - 100; sec.y = minY - 100;
     sec.resizeWithoutConstraints(maxX - minX + 200, maxY - minY + 200);
-    for (const r of roots) { const ax = r.x, ay = r.y; sec.appendChild(r); r.x = ax - sec.x; r.y = ay - sec.y; }
+    for (const r of all) { const ax = r.x, ay = r.y; sec.appendChild(r); r.x = ax - sec.x; r.y = ay - sec.y; }
     figma.currentPage.selection = [sec];
     figma.viewport.scrollAndZoomIntoView([sec]);
   } else {
     figma.currentPage.selection = roots;
     figma.viewport.scrollAndZoomIntoView(roots);
   }
-  figma.ui.postMessage({ type: 'done', name: roots.map(r => r.name).join(', '), seconds: Math.round((Date.now() - t0) / 100) / 10 });
+  figma.ui.postMessage({ type: 'fonts', reports });
+  figma.ui.postMessage({ type: 'done', name: roots.map(r => r.name).join(', '), seconds: Math.round((Date.now() - t0) / 100) / 10, scores });
 }
 
 figma.ui.onmessage = async (msg: any) => {
@@ -66,16 +123,13 @@ figma.ui.onmessage = async (msg: any) => {
       const { server, apiKey, url, widths, region } = msg;
       if (!/^https?:\/\//.test(server || '')) throw new Error('Set the capture server URL first (https://…).');
       figma.ui.postMessage({ type: 'status', text: `Capturing ${url} at ${widths.join(', ')}… this takes 10–60 s` });
-      const res = await fetch(server.replace(/\/$/, '') + '/capture', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', ...(apiKey ? { authorization: 'Bearer ' + apiKey } : {}) },
-        body: JSON.stringify({ url, widths, region: region || undefined }),
-      });
-      const text = await res.text();
-      let data: any; try { data = JSON.parse(text); } catch { throw new Error(`Server returned ${res.status}: ${text.slice(0, 200)}`); }
-      if (!res.ok) throw new Error(data.error || `Server returned ${res.status}`);
+      const data = await postJson(server, apiKey, '/capture', { url, widths, region: region || undefined, screenshot: msg.reference !== false || !!msg.diff });
       figma.ui.postMessage({ type: 'status', text: `Captured in ${(data.ms / 1000).toFixed(1)} s (region ${data.region}). Building…` });
       await buildCaptures(data.captures.map((c: any) => c.capture), msg);
+    } else if (msg.type === 'downloadFonts') {
+      // the page's own webfont files, converted to installable TTF/OTF by the server
+      const data = await postJson(msg.server, msg.apiKey, '/fonts', { faces: msg.faces });
+      figma.ui.postMessage({ type: 'fontFiles', family: msg.family, files: data.files });
     } else if (msg.type === 'close') {
       figma.closePlugin();
     }

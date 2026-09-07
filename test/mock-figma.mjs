@@ -24,13 +24,17 @@ function text() {
   let chars = '';
   Object.defineProperty(t, 'characters', { get: () => chars, set: v => { chars = v; t._fit(); } });
   t.fontName = { family: 'Inter', style: 'Regular' }; t.fontSize = 12; t.lineHeight = { unit: 'AUTO' }; t.letterSpacing = { unit: 'PIXELS', value: 0 };
-  t.textAlignHorizontal = 'LEFT'; t.textAutoResize = 'WIDTH_AND_HEIGHT'; t.textDecoration = 'NONE'; t.textCase = 'ORIGINAL';
+  let autoResize = 'WIDTH_AND_HEIGHT';
+  Object.defineProperty(t, 'textAutoResize', { get: () => autoResize, set: v => { autoResize = v; t._fit(); } });
+  t.textAlignHorizontal = 'LEFT'; t.textDecoration = 'NONE'; t.textCase = 'ORIGINAL';
   t._ranges = [];
   t.setRangeFontName = (s, e, f) => t._ranges.push(['font', s, e, f]);
   t.setRangeFontSize = (s, e, v) => t._ranges.push(['size', s, e, v]);
   t.setRangeFills = (s, e, v) => t._ranges.push(['fills', s, e, v]);
   t.setRangeTextDecoration = (s, e, v) => t._ranges.push(['deco', s, e, v]);
-  t._fit = () => { if (t.textAutoResize === 'WIDTH_AND_HEIGHT') { t.width = chars.length * t.fontSize * 0.55; t.height = t.lineHeight.unit === 'PIXELS' ? t.lineHeight.value : t.fontSize * 1.2; } };
+  t.setRangeLetterSpacing = (s, e, v) => { t._ranges.push(['ls', s, e, v]); if (s === 0 && e === chars.length) { t.letterSpacing = v; t._fit(); } };
+  // width model: 0.55em per glyph plus letter-spacing between glyphs — enough to test width compensation
+  t._fit = () => { if (autoResize === 'WIDTH_AND_HEIGHT') { const ls = t.letterSpacing && t.letterSpacing.unit === 'PIXELS' ? t.letterSpacing.value : 0; t.width = chars.length * t.fontSize * 0.55 + Math.max(0, chars.length - 1) * ls; t.height = t.lineHeight.unit === 'PIXELS' ? t.lineHeight.value : t.fontSize * 1.2; } };
   const origResize = t.resize; t.resize = (w, h) => { origResize.call(t, w, h); };
   return t;
 }

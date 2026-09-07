@@ -6,10 +6,11 @@
  * Figma's MCP `use_figma` or any other Plugin API host for testing.
  */
 
-export interface Capture { v: number; url: string; title: string; viewport: [number, number]; tree: CapNode; }
+export interface FontFace { family: string; weight: string; style: string; url: string; file: string; loaded?: boolean; }
+export interface Capture { v: number; url: string; title: string; viewport: [number, number]; tree: CapNode; fonts?: FontFace[]; screenshot?: string; }
 export interface CapNode {
   t: string; r: [number, number, number, number]; s?: any; c?: CapNode[];
-  txt?: string; f?: any; lines?: number;
+  txt?: string; f?: any; lines?: number; lw?: number;
   img?: string; nat?: [number, number]; svg?: string | null; svgColor?: string; svgFile?: string;
   id?: string; cl?: string; nm?: string;
 }
@@ -18,10 +19,14 @@ export interface BuildOptions {
   x?: number; y?: number;
   fallbackFont?: string;                 // family used when the site font is unavailable
   fontMap?: Record<string, string>;      // { "Komet": "Inter" }
+  matchWidths?: boolean;                 // when a font is substituted, adjust letter-spacing so lines keep their rendered width (default true)
   hideSelectors?: string[];              // class/id substrings to drop
   onProgress?: (done: number, total: number) => void;
   fetchImage?: (url: string) => Promise<Uint8Array | null>;  // for non-inlined images
+  onFonts?: (report: FontReport[]) => void;                  // called once the build is done
 }
+/** What happened to each family the page used — surfaced in the plugin UI after a build. */
+export interface FontReport { family: string; installed: boolean; usedAs: string; runs: number; files: FontFace[]; }
 
 const WEIGHTS: Record<string, string> = { '100': 'Thin', '200': 'Extra Light', '300': 'Light', '400': 'Regular', '500': 'Medium', '600': 'Semi Bold', '700': 'Bold', '800': 'Extra Bold', '900': 'Black', normal: 'Regular', bold: 'Bold' };
 const INLINE = new Set(['strong', 'b', 'em', 'i', 'a', 'span', 'u', 'small', 'sup', 'sub', 'mark', 'abbr', 'time', 'label']);
@@ -98,7 +103,9 @@ function nameOf(n: CapNode) {
   if (n.t === 'svg') return 'icon';
   const nm = n.nm || n.id || (n.cl || '').split(' ')[0];
   const base = nm && nm !== n.t ? `${n.t} · ${nm}`.slice(0, 60) : n.t;
-  return n.s && n.s.pos === 'fixed' ? `${base} (fixed${n.s.fixedBottom ? ', bottom' : ''})` : base;
+  const un = (n as any).unsupported as string[] | undefined;
+  const tagged = un && un.length ? `${base} (⚠ ${un.join(', ')})` : base;
+  return n.s && n.s.pos === 'fixed' ? `${tagged} (fixed${n.s.fixedBottom ? ', bottom' : ''})` : tagged;
 }
 function inlineRuns(n: CapNode): CapNode[] | null {
   const out: CapNode[] = [];
@@ -134,29 +141,72 @@ const adjacentChain = (runs: CapNode[]) => {
 };
 
 // ---------- fonts ----------
+const weightRange = (s: string): [number, number] => {
+  const p = String(s).trim().split(/\s+/).map(v => v === 'bold' ? 700 : v === 'normal' ? 400 : parseFloat(v));
+  return [p[0] || 400, p[1] ?? (p[0] || 400)];
+};
+// "KometBold.woff2" for family "Komet" → "Bold"; "Inter-SemiBoldItalic" → "Semi Bold Italic"
+function styleFromFile(file: string, family: string): string | null {
+  let s = file.replace(/\.[a-z0-9]+$/i, '').replace(/[-_ ]?(webfont|web|subset|latin|v\d+)$/i, '');
+  const fam = family.replace(/[^a-z0-9]/gi, '');
+  const i = s.replace(/[^a-z0-9]/gi, '').toLowerCase().indexOf(fam.toLowerCase());
+  if (i < 0) return null;
+  s = s.replace(/[^a-z0-9]/gi, '').slice(i + fam.length);
+  if (!s) return null;
+  s = s.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/(Semi|Extra|Ultra|Demi)(bold|light|black)/gi, (_, a, b) => `${a} ${b[0].toUpperCase()}${b.slice(1)}`);
+  s = s.replace(/\b(Bold|Light|Regular|Medium|Black|Heavy|Thin|Italic|Book|Roman)\b/gi, m => m[0].toUpperCase() + m.slice(1).toLowerCase());
+  return s.trim() || null;
+}
+
 class FontResolver {
   private cache = new Map<string, FontName>();
   private available: Set<string> | null = null;
-  constructor(private fallback: string, private map: Record<string, string>) {}
+  readonly report = new Map<string, FontReport>();
+  constructor(private fallback: string, private map: Record<string, string>, private faces: FontFace[] = []) {}
+  /** true when `fn` is a real match for the requested family (not a fallback) */
+  isSubstitute(cssFamily: string, fn: FontName): boolean {
+    const fams = this.families(cssFamily);
+    return !fams.some(f => (this.map[f] || f).toLowerCase() === fn.family.toLowerCase());
+  }
+  private families(cssFamily: string): string[] {
+    return cssFamily.split(',').map(f => f.trim().replace(/^["']|["']$/g, '')).filter(f => f && !/^(sans-serif|serif|monospace|system-ui|-apple-system|BlinkMacSystemFont|cursive|ui-sans-serif|ui-serif)$/i.test(f));
+  }
   async resolve(cssFamily: string, weight: string, italic: boolean): Promise<FontName> {
     let style = WEIGHTS[String(weight)] || 'Regular';
     if (italic) style = style === 'Regular' ? 'Italic' : style + ' Italic';
     const key = cssFamily + '|' + style;
-    if (this.cache.has(key)) return this.cache.get(key)!;
+    const hit = this.cache.get(key);
+    if (hit) { this.count(cssFamily, hit); return hit; }
     if (!this.available) {
       const fonts = await figma.listAvailableFontsAsync();
       this.available = new Set(fonts.map(f => f.fontName.family + '|' + f.fontName.style));
     }
-    const families = cssFamily.split(',').map(f => f.trim().replace(/^["']|["']$/g, '')).filter(f => f && !/^(sans-serif|serif|monospace|system-ui|-apple-system|BlinkMacSystemFont|cursive)$/i.test(f));
+    const families = this.families(cssFamily);
     const candidates = [...families.map(f => this.map[f] || f), this.fallback, 'Inter'];
-    const styleAlts = [style, style.replace(' Italic', ''), 'Regular'];
-    for (const fam of candidates) for (const st of styleAlts) {
-      if (this.available.has(fam + '|' + st)) {
-        const fn = { family: fam, style: st };
-        try { await figma.loadFontAsync(fn); this.cache.set(key, fn); return fn; } catch (_) { /* try next */ }
+    const [w0, w1] = weightRange(weight);
+    for (const fam of candidates) {
+      // Which face did the site actually load for this weight? (Komet 500 → KometBold.woff2 → "Bold")
+      const faceStyles: string[] = [];
+      for (const f of this.faces) {
+        if (f.family.toLowerCase() !== fam.toLowerCase() || (f.style === 'italic') !== italic) continue;
+        const [f0, f1] = weightRange(f.weight); if (f0 > w1 || f1 < w0) continue;
+        const st = styleFromFile(f.file, f.family); if (st) faceStyles.push(italic && !/Italic/.test(st) ? st + ' Italic' : st);
+      }
+      const styleAlts = [...faceStyles, style, style.replace(' Italic', ''), 'Regular'];
+      for (const st of styleAlts) {
+        if (this.available.has(fam + '|' + st)) {
+          const fn = { family: fam, style: st };
+          try { await figma.loadFontAsync(fn); this.cache.set(key, fn); this.count(cssFamily, fn); return fn; } catch (_) { /* try next */ }
+        }
       }
     }
-    const fn = { family: 'Inter', style: 'Regular' }; await figma.loadFontAsync(fn); this.cache.set(key, fn); return fn;
+    const fn = { family: 'Inter', style: 'Regular' }; await figma.loadFontAsync(fn); this.cache.set(key, fn); this.count(cssFamily, fn); return fn;
+  }
+  private count(cssFamily: string, fn: FontName) {
+    const fam = this.families(cssFamily)[0] || cssFamily;
+    let r = this.report.get(fam);
+    if (!r) { r = { family: fam, installed: !this.isSubstitute(cssFamily, fn), usedAs: fn.family, runs: 0, files: this.faces.filter(f => f.family.toLowerCase() === fam.toLowerCase()) }; this.report.set(fam, r); }
+    r.runs++;
   }
 }
 
@@ -184,7 +234,8 @@ class ImageStore {
 
 // ---------- build ----------
 export async function build(cap: Capture, opts: BuildOptions = {}): Promise<FrameNode> {
-  const fonts = new FontResolver(opts.fallbackFont || 'Inter', opts.fontMap || {});
+  const fonts = new FontResolver(opts.fallbackFont || 'Inter', opts.fontMap || {}, cap.fonts || []);
+  const matchWidths = opts.matchWidths !== false;
   const images = new ImageStore(opts.fetchImage);
   const drop = [...DROP_CLASS, ...(opts.hideSelectors || [])];
 
@@ -249,10 +300,37 @@ export async function build(cap: Capture, opts: BuildOptions = {}): Promise<Fram
         if ((g.f.td || '').includes('underline')) t.setRangeTextDecoration(g.s, g.e, 'UNDERLINE');
       }
     }
+    if (f0.tsh) { const fx = parseShadow(f0.tsh); if (fx.length) t.effects = fx; }
     const multiline = runs.length > 1 ? !adjacentChain(runs) : (runs[0].lines || 1) > 1;
-    if (multiline) { t.textAutoResize = 'HEIGHT'; t.resize(Math.max(box[2] * 1.04 + 4, 4), Math.max(box[3], 1)); }
+
+    // Substituted font? Make the text occupy the same width it had on the page by trimming/adding
+    // letter-spacing, so wraps, centring and neighbours line up even in a fallback family.
+    // Measured unwrapped (one line) against the sum of the run's rendered line widths.
+    const substituted = fonts.isSubstitute(f0.ff, primary);
+    let compensated = false;
+    if (matchWidths && substituted && txt.length > 1) {
+      const target = runs.reduce((a, k) => a + (k.lw || k.r[2]), 0);
+      t.textAutoResize = 'WIDTH_AND_HEIGHT';
+      const measured = t.width;
+      if (measured > 0 && target > 0) {
+        const glyphs = txt.length - (txt.match(/\n/g) || []).length;
+        const per = (target - measured) / Math.max(1, glyphs - 1);
+        const cap = 0.08 * f0.fs;                       // never distort beyond ±8% of the size
+        const delta = Math.max(-cap, Math.min(cap, per));
+        if (Math.abs(delta) > 0.02) {
+          const base = ls || 0;
+          t.setRangeLetterSpacing(0, txt.length, { unit: 'PIXELS', value: base + delta });
+          for (const g of segs) if (g.e > g.s && g.f.ls && px(g.f.ls) !== null && px(g.f.ls) !== ls) t.setRangeLetterSpacing(g.s, g.e, { unit: 'PIXELS', value: (px(g.f.ls) || 0) + delta });
+          compensated = Math.abs(per - delta) < 0.01;   // fully matched (not clamped)
+        }
+      }
+    }
+    // Wrapping box: a little slack for un-compensated fallbacks; tight when widths were matched
+    // (extra slack would let one more word onto a line and change the wraps).
+    const slack = compensated ? 1.5 : !substituted ? 3 : box[2] * 0.04 + 4;
+    if (multiline) { t.textAutoResize = 'HEIGHT'; t.resize(Math.max(box[2] + slack, 4), Math.max(box[3], 1)); }
     else t.textAutoResize = 'WIDTH_AND_HEIGHT';
-    padOf.set(t, multiline ? (Math.max(box[2] * 1.04 + 4, 4) - box[2]) / 2 : 0);
+    padOf.set(t, multiline ? slack / 2 : 0);
     t.name = name;
     return t;
   }
@@ -395,5 +473,6 @@ export async function build(cap: Capture, opts: BuildOptions = {}): Promise<Fram
   }
 
   const root = await rec(tree, figma.currentPage, tree.r[0], tree.r[1], true);
+  if (opts.onFonts) opts.onFonts([...fonts.report.values()].sort((a, b) => b.runs - a.runs));
   return root as FrameNode;
 }

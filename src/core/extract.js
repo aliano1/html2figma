@@ -63,13 +63,17 @@ export function extract(options = {}) {
     if (!rs.length) return null;
     const b = rg.getBoundingClientRect();
     if (b.width <= 0 || b.height <= 0) return null;
+    // lw: total advance of the run across all its line boxes — lets the builder match the rendered
+    // width even when the site's font isn't installed in Figma (letter-spacing compensation)
+    let lw = 0; for (const q of rs) lw += q.width;
     return {
-      t: '#text', txt, lines: rs.length,
+      t: '#text', txt, lines: rs.length, lw: rnd(lw),
       r: [rnd(b.left + sx), rnd(b.top + sy), rnd(b.width), rnd(b.height)],
       f: {
         ff: cs.fontFamily, fs: parseFloat(cs.fontSize), fw: cs.fontWeight, fst: cs.fontStyle,
         lh: cs.lineHeight, ls: cs.letterSpacing, col: cs.color, ta: cs.textAlign,
         tt: cs.textTransform, td: cs.textDecorationLine,
+        ...(cs.textShadow && cs.textShadow !== 'none' ? { tsh: cs.textShadow } : {}),
       },
     };
   }
@@ -135,11 +139,27 @@ export function extract(options = {}) {
       }).trim();
       if (rest) filt = rest;
     }
-    if (filt) {
+    // Other things Figma layers can't express. Rotation/scale/skew (translation is already in the
+    // rects), clip-path, masks, blend modes, backdrop blur, text-shadow, vertical text: screenshot the
+    // element as rendered instead of approximating it. Whole sections are never flattened.
+    const unsupported = [];
+    if (cs.transform && cs.transform !== 'none') {
+      const m = cs.transform.match(/matrix\(([^)]+)\)/);
+      const v = m ? m[1].split(',').map(parseFloat) : null;
+      if (!v || Math.abs(v[0] - 1) > 0.01 || Math.abs(v[3] - 1) > 0.01 || Math.abs(v[1]) > 0.01 || Math.abs(v[2]) > 0.01) unsupported.push('transform');
+    }
+    if (cs.clipPath && cs.clipPath !== 'none') unsupported.push('clip-path');
+    const mask = cs.maskImage || cs.webkitMaskImage; if (mask && mask !== 'none') unsupported.push('mask');
+    if (cs.mixBlendMode && cs.mixBlendMode !== 'normal') unsupported.push('mix-blend-mode');
+    const bdf = cs.backdropFilter || cs.webkitBackdropFilter; if (bdf && bdf !== 'none') unsupported.push('backdrop-filter');
+    if (cs.writingMode && cs.writingMode !== 'horizontal-tb') unsupported.push('writing-mode');
+    if (filt) unsupported.unshift(filt);
+    if (unsupported.length) {
       const isMedia = /^(IMG|svg|VIDEO|CANVAS)$/.test(el.tagName);
       const modest = r[2] * r[3] <= 800 * 800 && el.querySelectorAll('img, svg, video, canvas').length <= 4;   // don't flatten whole sections
-      if (opts.markForRaster && (isMedia || modest)) { n.filt = filt; n.rasterAll = true; }
-      else if (el.tagName === 'IMG') n.filt = filt;   // bookmarklet: inlineImages bakes it into the pixels
+      if (opts.markForRaster && (isMedia || modest)) { n.filt = unsupported.join(' '); n.rasterAll = true; }
+      else if (filt && el.tagName === 'IMG') n.filt = filt;   // bookmarklet: inlineImages bakes CSS filters into the pixels
+      else n.unsupported = unsupported;                       // bookmarklet: at least name it in the layer
     }
     if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') s.ov = 'hidden';
     if (cs.position === 'fixed' || cs.position === 'sticky') { s.pos = cs.position; if (fi && fi.bottom) s.fixedBottom = true; }
@@ -251,8 +271,45 @@ export function extract(options = {}) {
     viewport: [window.innerWidth, window.innerHeight],
     dpr: window.devicePixelRatio,
     capturedAt: new Date().toISOString(),
+    fonts: fontFaces(),
     tree,
   };
+}
+
+/**
+ * The webfonts the page actually loaded: which file backs each family/weight/style. The builder uses
+ * this to pick the right installed face (a site's "500" is often the foundry's Bold) and the plugin
+ * offers the files for installation when the family is missing in Figma.
+ */
+function fontFaces() {
+  const out = [];
+  const loaded = new Set();
+  try { for (const f of document.fonts) if (f.status === 'loaded') loaded.add((f.family + '|' + f.weight + '|' + f.style).replace(/"/g, '').toLowerCase()); } catch (_) { /* no FontFaceSet */ }
+  const seen = new Set();
+  for (const ss of document.styleSheets) {
+    let rules; try { rules = ss.cssRules; } catch (_) { continue; }   // cross-origin sheet
+    if (!rules) continue;
+    for (const rule of rules) {
+      if (!(rule.type === 5 /* FONT_FACE_RULE */)) continue;
+      const st = rule.style;
+      const family = (st.getPropertyValue('font-family') || '').replace(/^["']|["']$/g, '').trim();
+      const weight = (st.getPropertyValue('font-weight') || '400').trim() || '400';
+      const style = (st.getPropertyValue('font-style') || 'normal').trim() || 'normal';
+      const m = (st.getPropertyValue('src') || '').match(/url\(["']?([^"')]+)["']?\)/);
+      if (!family || !m) continue;
+      let url = m[1]; try { url = new URL(url, ss.href || location.href).href; } catch (_) { /* keep */ }
+      const key = family.toLowerCase() + '|' + weight + '|' + style;
+      const isLoaded = loaded.has(key) || [...loaded].some(k => k.startsWith(family.toLowerCase() + '|') && k.endsWith('|' + style) && weightMatches(k.split('|')[1], weight));
+      if (seen.has(key + url)) continue; seen.add(key + url);
+      out.push({ family, weight, style, url, file: url.split('/').pop().split('?')[0], loaded: isLoaded });
+    }
+  }
+  return out.filter(f => f.loaded);
+}
+function weightMatches(a, b) {
+  const range = s => { const p = String(s).split(/\s+/).map(v => v === 'bold' ? 700 : v === 'normal' ? 400 : parseFloat(v)); return [p[0], p[1] ?? p[0]]; };
+  const [a0, a1] = range(a), [b0, b1] = range(b);
+  return a0 <= b1 && b0 <= a1;
 }
 
 /** Scroll through the page so lazy-loaded images/sections render, then return to top. */

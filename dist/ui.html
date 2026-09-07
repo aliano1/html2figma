@@ -60,13 +60,21 @@
   <div class="row"><button id="build">Build in Figma</button></div>
 </section>
 
-<details><summary>Font options</summary>
+<details><summary>Fidelity &amp; font options</summary>
+  <div class="row"><label><input type="checkbox" id="reference" checked> Add the page screenshot next to the build (+ a hidden 50 % overlay inside it)</label></div>
+  <div class="row"><label><input type="checkbox" id="diff" checked> Compare build with screenshot — fidelity score + red diff map (server)</label></div>
+  <div class="row"><label><input type="checkbox" id="matchWidths" checked> Match text widths when a font is missing (adjusts letter-spacing)</label></div>
   <div class="row"><span>Fallback font</span><input id="fallback" type="text" value="Inter"></div>
   <div class="row"><span>Font map</span><input id="fontmap" type="text" placeholder="Komet=Inter, Helvetica Neue=Helvetica"></div>
 </details>
 
 <div id="status"></div>
 <progress id="bar" value="0" max="1" hidden></progress>
+<div id="fonts" hidden>
+  <h1 style="margin-top:12px">Fonts on this page</h1>
+  <div id="fontList"></div>
+  <p id="fontNote" hidden>Install the downloaded files (double-click → Install), then run the build again — Figma picks up newly installed fonts after a restart of the desktop app. Webfonts are licensed by the site owner; make sure you're allowed to use them.</p>
+</div>
 
 <script>
   const $ = id => document.getElementById(id);
@@ -82,13 +90,42 @@
   // settings persistence (server, key, fonts)
   post({ type: 'init' });
   const settingIds = ['server', 'apikey', 'fallback', 'fontmap', 'region'];
-  const saveSettings = () => post({ type: 'saveSettings', settings: Object.fromEntries(settingIds.map(id => [id, $(id).value])) });
-  settingIds.forEach(id => $(id).addEventListener('change', saveSettings));
+  const flagIds = ['reference', 'diff', 'matchWidths'];
+  const saveSettings = () => post({ type: 'saveSettings', settings: { ...Object.fromEntries(settingIds.map(id => [id, $(id).value])), ...Object.fromEntries(flagIds.map(id => [id, $(id).checked])) } });
+  [...settingIds, ...flagIds].forEach(id => $(id).addEventListener('change', saveSettings));
 
   function fontOpts() {
     const fontMap = {};
     $('fontmap').value.split(',').map(s => s.trim()).filter(Boolean).forEach(pair => { const [a, b] = pair.split('=').map(s => s.trim()); if (a && b) fontMap[a] = b; });
-    return { fallbackFont: $('fallback').value.trim() || 'Inter', fontMap };
+    return { fallbackFont: $('fallback').value.trim() || 'Inter', fontMap, matchWidths: $('matchWidths').checked, reference: $('reference').checked, diff: $('diff').checked,
+             server: $('server').value.trim(), apiKey: $('apikey').value.trim() };
+  }
+  function showFonts(reports) {
+    const list = $('fontList'); list.innerHTML = '';
+    const merged = new Map();
+    for (const r of reports) for (const f of r.fonts) { const m = merged.get(f.family) || { ...f, runs: 0 }; m.runs += f.runs; m.installed = m.installed && f.installed; merged.set(f.family, m); }
+    if (!merged.size) { $('fonts').hidden = true; return; }
+    let missing = false;
+    for (const f of [...merged.values()].sort((a, b) => b.runs - a.runs)) {
+      const row = document.createElement('div'); row.className = 'row';
+      row.innerHTML = `<span style="width:auto;flex:1;color:inherit">${f.installed ? '✓' : '⚠'} <b>${f.family}</b> · ${f.runs} text layer${f.runs === 1 ? '' : 's'}${f.installed ? '' : ` — <span style="color:var(--figma-color-text-danger)">missing, built with ${f.usedAs}</span>`}</span>`;
+      if (!f.installed && f.files && f.files.length && $('server').value.trim()) {
+        const b = document.createElement('button'); b.className = 'secondary'; b.textContent = `Download ${f.files.length} file${f.files.length === 1 ? '' : 's'}`;
+        b.onclick = () => { b.disabled = true; b.textContent = 'Converting…'; post({ type: 'downloadFonts', family: f.family, faces: f.files, server: $('server').value.trim(), apiKey: $('apikey').value.trim() }); };
+        row.appendChild(b); missing = true;
+      } else if (!f.installed && !(f.files && f.files.length)) {
+        const s = document.createElement('span'); s.style.color = 'var(--figma-color-text-secondary)'; s.textContent = 'system font on the page — install it yourself'; row.appendChild(s);
+      }
+      list.appendChild(row);
+    }
+    $('fontNote').hidden = !missing; $('fonts').hidden = false;
+  }
+  function saveFiles(files) {
+    for (const f of files) {
+      if (!f.data) continue;
+      const bytes = Uint8Array.from(atob(f.data), c => c.charCodeAt(0));
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([bytes], { type: 'font/ttf' })); a.download = f.name; document.body.appendChild(a); a.click(); a.remove();
+    }
   }
   function busy(on, text) { $('capture').disabled = on; $('build').disabled = on; $('bar').hidden = !on; if (on) $('bar').value = 0; if (text !== undefined) $('status').textContent = text; }
 
@@ -115,10 +152,12 @@
 
   window.onmessage = e => {
     const m = e.data.pluginMessage; if (!m) return;
-    if (m.type === 'settings') { for (const id of settingIds) if (m.settings[id] !== undefined) $(id).value = m.settings[id]; }
+    if (m.type === 'settings') { for (const id of settingIds) if (m.settings[id] !== undefined) $(id).value = m.settings[id]; for (const id of flagIds) if (typeof m.settings[id] === 'boolean') $(id).checked = m.settings[id]; }
     if (m.type === 'status') $('status').textContent = m.text;
     if (m.type === 'progress') { $('bar').value = m.done / m.total; $('status').textContent = `Building ${m.count > 1 ? (m.index + 1) + '/' + m.count + ' ' : ''}… ${m.done}/${m.total} layers`; }
-    if (m.type === 'done') { $('bar').value = 1; busy(false, `Done in ${m.seconds}s → ${m.name}`); $('bar').hidden = false; }
+    if (m.type === 'done') { $('bar').value = 1; busy(false, `Done in ${m.seconds}s → ${m.name}${m.scores && m.scores.length ? ' · match: ' + m.scores.join(', ') : ''}`); $('bar').hidden = false; }
+    if (m.type === 'fonts') showFonts(m.reports);
+    if (m.type === 'fontFiles') { saveFiles(m.files); const errs = m.files.filter(f => f.error); $('status').textContent = `${m.files.length - errs.length} font file(s) for ${m.family} downloaded${errs.length ? '; failed: ' + errs.map(f => f.file + ' (' + f.error + ')').join(', ') : ''}. Install them, restart Figma, build again.`; document.querySelectorAll('#fontList button').forEach(b => { b.disabled = false; b.textContent = 'Download again'; }); }
     if (m.type === 'error') busy(false, 'Error: ' + m.message);
   };
 </script>

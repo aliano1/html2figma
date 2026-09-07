@@ -1,9 +1,11 @@
 /**
  * html2figma capture server
  *
- *   POST /capture   { url, widths?: [1920, 390], region?: "ams", hideSelectors?: [], waitFor?: css, timeoutMs? }
- *                   → { url, title, captures: [{ viewport: [w, h], capture }] }
- *   GET  /healthz   → { ok, region, browser }
+ *   POST /capture   { url, widths?: [1920, 390], region?: "ams", hideSelectors?: [], waitFor?: css, timeoutMs?, screenshot?: true }
+ *                   → { url, title, captures: [{ viewport: [w, h], capture }] }   (capture.screenshot = full-page JPEG when asked)
+ *   POST /fonts     { faces: [{family, weight, style, url, file}] } → { files: [{name, data(base64 ttf/otf)}] }
+ *   POST /diff      { reference: dataURL, candidate: dataURL, cell? } → { similarity, diff: dataURL, regions: [{x,y,w,h,pct}] }
+ *   GET  /healthz   → { ok, region, browser, features }
  *
  * Auth: `Authorization: Bearer <H2F_API_KEY>` (or `x-api-key`). If H2F_API_KEY is unset the
  * server refuses to start unless H2F_ALLOW_ANON=1 (local dev only).
@@ -97,6 +99,14 @@ async function captureViewport(b, opts, width) {
     // rasterise the marked elements
     await rasterise(page, capture);
 
+    // reference screenshot of the whole page (what the build is compared against in Figma)
+    if (opts.screenshot) {
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.waitForTimeout(150);
+      const png = await page.screenshot({ fullPage: true, type: 'jpeg', quality: 88, animations: 'disabled', timeout: 30000 }).catch(() => null);
+      if (png) capture.screenshot = 'data:image/jpeg;base64,' + png.toString('base64');
+    }
+
     return { viewport: capture.viewport, capture };
   } finally {
     await ctx.close().catch(() => {});
@@ -162,16 +172,75 @@ async function rasterise(page, capture) {
   await page.evaluate(() => document.querySelectorAll('[data-h2f-shot]').forEach(e => e.removeAttribute('data-h2f-shot')));
 }
 
+// ---------- fonts: the page's own webfonts as installable TTFs ----------
+// woff2 is just a compressed sfnt (TTF/OTF); decompressing gives a file macOS/Windows can install.
+// The user is responsible for the font's licence — the plugin says so next to the button.
+async function fontFiles(ctx, faces) {
+  const { decompress } = await import('wawoff2');
+  const out = [];
+  for (const f of faces.slice(0, 24)) {
+    try {
+      const res = await ctx.request.get(f.url, { timeout: 15000 });
+      if (!res.ok()) { out.push({ ...f, error: 'HTTP ' + res.status() }); continue; }
+      let buf = await res.body();
+      let ext = 'ttf';
+      const magic = buf.subarray(0, 4).toString('latin1');
+      if (magic === 'wOF2') buf = Buffer.from(await decompress(new Uint8Array(buf)));
+      else if (magic === 'wOFF') { out.push({ ...f, error: 'woff1 not supported yet' }); continue; }
+      if (buf.subarray(0, 4).toString('latin1') === 'OTTO') ext = 'otf';
+      const name = (f.file || (f.family + '-' + f.weight)).replace(/\.[a-z0-9]+$/i, '') + '.' + ext;
+      out.push({ family: f.family, weight: f.weight, style: f.style, name, data: buf.toString('base64') });
+    } catch (e) { out.push({ ...f, error: String(e.message || e).slice(0, 100) }); }
+  }
+  return out;
+}
+
+// ---------- diff: reference screenshot vs. Figma export ----------
+// Both images are page-sized; compare in a blank page via canvas so no native deps are needed.
+// Returns a similarity score, a heat-map PNG (red where pixels differ) and the worst grid cells.
+async function diffImages(b, a, bImg, cell) {
+  const ctx = await b.newContext({ viewport: { width: 800, height: 600 } });
+  try {
+    const page = await ctx.newPage();
+    await page.setContent('<canvas id=c></canvas>');
+    return await page.evaluate(async ({ a, bImg, cell }) => {
+      const load = src => new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('bad image')); i.src = src; });
+      const [A, B] = await Promise.all([load(a), load(bImg)]);
+      const W = Math.min(A.width, B.width), H = Math.min(A.height, B.height);
+      // both are page-sized at the same page width, so no scaling: draw at natural size, crop to the common area
+      const pixels = (im, white) => { const c = document.createElement('canvas'); c.width = W; c.height = H; const g = c.getContext('2d'); if (white) { g.fillStyle = '#fff'; g.fillRect(0, 0, W, H); } g.drawImage(im, 0, 0); return g.getImageData(0, 0, W, H).data; };
+      const pa = pixels(A, false), pb = pixels(B, true);
+      const out = document.getElementById('c'); out.width = W; out.height = H;
+      const g = out.getContext('2d'); g.drawImage(A, 0, 0); g.fillStyle = 'rgba(255,255,255,0.55)'; g.fillRect(0, 0, W, H);
+      const heat = g.getImageData(0, 0, W, H); const hd = heat.data;
+      const cols = Math.ceil(W / cell), rows = Math.ceil(H / cell);
+      const cellDiff = new Float64Array(cols * rows);
+      let diff = 0;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        const d = Math.abs(pa[i] - pb[i]) + Math.abs(pa[i + 1] - pb[i + 1]) + Math.abs(pa[i + 2] - pb[i + 2]);
+        if (d > 90) { diff++; cellDiff[Math.floor(y / cell) * cols + Math.floor(x / cell)]++; hd[i] = 235; hd[i + 1] = 40; hd[i + 2] = 60; hd[i + 3] = 255; }
+      }
+      g.putImageData(heat, 0, 0);
+      const regions = [];
+      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { const pct = cellDiff[r * cols + c] / (cell * cell); if (pct > 0.12) regions.push({ x: c * cell, y: r * cell, w: cell, h: cell, pct: Math.round(pct * 100) }); }
+      regions.sort((p, q) => q.pct - p.pct);
+      return { width: W, height: H, heightA: A.height, heightB: B.height, similarity: 1 - diff / (W * H), diff: out.toDataURL('image/png'), regions: regions.slice(0, 200) };
+    }, { a, bImg, cell });
+  } finally { await ctx.close().catch(() => {}); }
+}
+
 // ---------- HTTP ----------
 function json(res, status, body, headers = {}) {
   const s = JSON.stringify(body);
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': '*', ...headers });
   res.end(s);
 }
-function readBody(req) {
+function readBody(req, limit = 1e6) {
   return new Promise((resolve, reject) => {
-    let d = ''; req.on('data', c => { d += c; if (d.length > 1e6) { reject(new Error('body too large')); req.destroy(); } });
-    req.on('end', () => resolve(d)); req.on('error', reject);
+    const chunks = []; let size = 0;
+    req.on('data', c => { size += c.length; if (size > limit) { reject(new Error('body too large')); req.destroy(); } else chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8'))); req.on('error', reject);
   });
 }
 function authed(req) {
@@ -185,12 +254,28 @@ const MAX_INFLIGHT = Number(process.env.H2F_MAX_INFLIGHT || 2);
 
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization, x-api-key, content-type', 'access-control-allow-methods': 'POST, GET, OPTIONS' }); return res.end(); }
-  if (req.url === '/healthz') return json(res, 200, { ok: true, region: REGION, browser: browserName || null, inflight });
-  if (req.method !== 'POST' || req.url !== '/capture') return json(res, 404, { error: 'not found' });
+  if (req.url === '/healthz') return json(res, 200, { ok: true, region: REGION, browser: browserName || null, inflight, features: ['screenshot', 'fonts', 'diff'] });
+  if (req.method !== 'POST' || !['/capture', '/fonts', '/diff'].includes(req.url)) return json(res, 404, { error: 'not found' });
   if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
 
   let body;
-  try { body = JSON.parse(await readBody(req) || '{}'); } catch { return json(res, 400, { error: 'invalid JSON' }); }
+  try { body = JSON.parse(await readBody(req, req.url === '/diff' ? 80e6 : 1e6) || '{}'); } catch (e) { return json(res, 400, { error: /large/.test(String(e.message)) ? 'body too large' : 'invalid JSON' }); }
+
+  if (req.url === '/fonts') {
+    // { faces: [{family, weight, style, url, file}] } → { files: [{family, weight, style, name, data(base64)}] }
+    const faces = (Array.isArray(body.faces) ? body.faces : []).filter(f => f && /^https?:\/\//.test(String(f.url || '')));
+    if (!faces.length) return json(res, 400, { error: 'no font faces given' });
+    try {
+      const b = await browser(); const ctx = await b.newContext();
+      try { return json(res, 200, { files: await fontFiles(ctx, faces) }); } finally { await ctx.close().catch(() => {}); }
+    } catch (e) { return json(res, 500, { error: String(e.message || e).slice(0, 300) }); }
+  }
+  if (req.url === '/diff') {
+    // { reference: dataURL, candidate: dataURL, cell?: 24 } → { similarity, diff (png dataURL), regions[] }
+    if (!/^data:image\//.test(String(body.reference || '')) || !/^data:image\//.test(String(body.candidate || ''))) return json(res, 400, { error: 'reference and candidate must be image data URLs' });
+    try { const b = await browser(); return json(res, 200, await diffImages(b, body.reference, body.candidate, Math.max(8, Math.min(200, Number(body.cell) || 24)))); }
+    catch (e) { return json(res, 500, { error: String(e.message || e).slice(0, 300) }); }
+  }
   const url = String(body.url || '');
   if (!/^https?:\/\//.test(url)) return json(res, 400, { error: 'url must be http(s)' });
   const widths = (Array.isArray(body.widths) && body.widths.length ? body.widths : [1920]).map(Number).filter(w => w >= 320 && w <= 3840).slice(0, MAX_WIDTHS);
@@ -205,7 +290,7 @@ const server = http.createServer(async (req, res) => {
   const t0 = Date.now();
   try {
     const b = await browser();
-    const opts = { url, hideSelectors: body.hideSelectors, waitFor: body.waitFor, timeoutMs: Math.min(Number(body.timeoutMs) || 45000, 120000), locale: body.locale, timezone: body.timezone, headers: body.headers, cookies: body.cookies };
+    const opts = { url, hideSelectors: body.hideSelectors, waitFor: body.waitFor, timeoutMs: Math.min(Number(body.timeoutMs) || 45000, 120000), locale: body.locale, timezone: body.timezone, headers: body.headers, cookies: body.cookies, screenshot: !!body.screenshot };
     const captures = [];
     for (const w of widths) captures.push(await captureViewport(b, opts, w));   // sequential: predictable memory
     json(res, 200, { url, title: captures[0].capture.title, region: REGION, ms: Date.now() - t0, captures });

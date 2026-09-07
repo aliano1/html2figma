@@ -32,6 +32,31 @@ check(inst.length === 1 && inst[0].characters === '4 interest-free installments,
 check(inst[0] && inst[0].textAutoResize === 'WIDTH_AND_HEIGHT' && inst[0]._ranges.some(x => x[0] === 'font' && inst[0].characters.slice(x[1], x[2]) === '$85.29'), 'merged single-line node stays single-line and keeps the bold range on the price');
 check(!texts.some(t => t.characters === '$85.29' || t.characters === '/mo with'), 'no stray separate nodes for the price / "/mo with"');
 if (inst[0]) { const icon = inst[0].parent.children.find(c => c !== inst[0] && c.name === 'icon'); check(!!icon && icon.x >= inst[0].x + inst[0].width - 1, `trailing inline svg survives next to the merged line (icon x=${icon && icon.x.toFixed(1)}, text right=${(inst[0].x + inst[0].width).toFixed(1)})`); }
+// width compensation for a substituted font: the mock's Inter is a different width from the browser's
+// fallback for "Komet"; letter-spacing must be adjusted so the unwrapped width equals the captured line widths
+const kom = byChars('Editable text in a font')[0];
+const komCap = (function find(n) { if (n.txt && n.txt.includes('Editable text in a font')) return n; for (const k of n.c || []) { const r = find(k); if (r) return r; } return null; })(cap.tree);
+if (kom && komCap) {
+  const lsRange = kom._ranges.find(x => x[0] === 'ls' && x[1] === 0);
+  check(!!lsRange, `substituted font got letter-spacing compensation (${lsRange ? lsRange[3].value.toFixed(2) + 'px' : 'none'})`);
+  const t = globalThis.figma.createText(); t.fontSize = kom.fontSize; t.letterSpacing = kom.letterSpacing; t.characters = kom.characters;
+  const tolerance = Math.max(2, 0.08 * kom.fontSize * kom.characters.length);   // clamp may limit the correction
+  check(Math.abs(t.width - komCap.lw) <= tolerance, `unwrapped width ${t.width.toFixed(1)} ≈ captured ${komCap.lw} (multi-line, lines=${komCap.lines})`);
+  const clamped = lsRange && Math.abs(Math.abs(lsRange[3].value) - 0.08 * kom.fontSize) < 0.01;
+  check(kom.textAutoResize === 'HEIGHT' && kom.width <= komCap.r[2] + (clamped ? komCap.r[2] * 0.04 + 4.5 : 2), `multi-line box stays tight to the captured width (${kom.width.toFixed(1)} vs ${komCap.r[2]}${clamped ? ', correction clamped so slack allowed' : ''})`);
+}
+let fontReport = null;
+await mod.build(cap, { x: 0, y: 3000, name: 'test2', onFonts: r => { fontReport = r; } });
+check(fontReport && fontReport.some(f => f.family === 'Komet' && !f.installed && f.usedAs === 'Inter') && fontReport.some(f => f.family === 'Helvetica' && f.installed), `font report lists substitutions: ${fontReport && fontReport.map(f => `${f.family}→${f.usedAs}${f.installed ? '' : ' (missing)'}`).join(', ')}`);
+// face-aware weights: the page says Helvetica 500 loads "HelveticaBold.woff2" → use the installed Bold face, not Medium/Regular
+{
+  const cap2 = JSON.parse(JSON.stringify(cap)); cap2.fonts = [{ family: 'Helvetica', weight: '500', style: 'normal', url: 'x', file: 'HelveticaBold.woff2' }];
+  const root2 = await mod.build(cap2, { x: 0, y: 6000, name: 'test3' });
+  const nav = root2.findAll(n => n.type === 'TEXT' && n.characters === 'Cookware')[0];
+  check(nav && nav.fontName.style === 'Bold', `weight 500 mapped onto the face the site loaded (got ${nav && nav.fontName.family + ' ' + nav.fontName.style})`);
+  const body = root2.findAll(n => n.type === 'TEXT' && n.characters.startsWith('Our 15-piece'))[0];
+  check(body && body.fontName.style === 'Regular', `weight 400 untouched (got ${body && body.fontName.style})`);
+}
 const lbl = byChars('Add to cart')[0];
 if (lbl) { const btn = (function up(n) { return n.name.includes('flexbtn') ? n : n.parent && n.parent.type !== 'PAGE' ? up(n.parent) : null; })(lbl); const [lx] = abs(lbl), [bx] = abs(btn); const gapL = lx - bx, gapR = bx + btn.width - (lx + lbl.width); check(Math.abs(gapL - gapR) < 2, `flex-centred label stays centred (gaps ${gapL.toFixed(1)} / ${gapR.toFixed(1)})`); }
 check(root.findAll(n => n.type === 'RECTANGLE' && n.name === 'image' && n.fills[0] && n.fills[0].type === 'IMAGE').length === 1, 'inlined image became an IMAGE fill');
@@ -43,8 +68,10 @@ if (logoCap) {
   const buf = Buffer.from(logoCap.img.split(',')[1], 'base64');
   let pos = 8, idat = [], w = 0, ct = 0;
   while (pos < buf.length) { const len = buf.readUInt32BE(pos), type = buf.toString('ascii', pos + 4, pos + 8); const d = buf.subarray(pos + 8, pos + 8 + len); if (type === 'IHDR') { w = d.readUInt32BE(0); ct = d[9]; } if (type === 'IDAT') idat.push(d); pos += 12 + len; }
-  const raw = inflateSync(Buffer.concat(idat)); const bpp = ct === 6 ? 4 : 3; const px = raw.subarray(1 + Math.floor(w / 2) * bpp, 1 + Math.floor(w / 2) * bpp + 3);
-  check(Math.abs(px[0] - px[1]) < 8 && Math.abs(px[1] - px[2]) < 8 && px[0] > 30, `grayscale baked into pixels (mid pixel rgb=${[...px].join(',')})`);
+  const raw = inflateSync(Buffer.concat(idat)); const bpp = ct === 6 ? 4 : 3; const stride = 1 + w * bpp; const rows = Math.floor(raw.length / stride);
+  const row = Math.floor(rows / 2), off = row * stride; const ftype = raw[off]; const px = raw.subarray(off + 1 + Math.floor(w / 2) * bpp, off + 1 + Math.floor(w / 2) * bpp + 3);
+  if (ftype === 0) check(Math.abs(px[0] - px[1]) < 8 && Math.abs(px[1] - px[2]) < 8 && px[0] > 30, `grayscale baked into pixels (mid pixel rgb=${[...px].join(',')})`);
+  else console.log(`skip grayscale pixel check (PNG row filter ${ftype}; server test verifies this path)`);
   const logoNode = root.findAll(n => n.type === 'RECTANGLE' && /^image \(grayscale/.test(n.name))[0];
   check(!!logoNode && logoNode.fills[0].type === 'IMAGE', 'filtered image layer named after its filter');
 }

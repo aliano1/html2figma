@@ -84,10 +84,15 @@ Point the plugin's Server URL at `http://localhost:8080`. (Figma desktop allows 
 | `locale`, `timezone` | string | browser locale / IANA tz |
 | `cookies` | Playwright cookie[] | for logged-in captures |
 | `headers` | object | extra request headers |
+| `screenshot` | boolean | also return a full-page JPEG of each viewport in `capture.screenshot` (the plugin's reference/diff features need it) |
 
-Response: `{ url, title, region, ms, captures: [{ viewport: [w, h], capture }] }` — each `capture` is exactly what the bookmarklet produces, plus rasterised video frames / glyphs / tainted canvases as inline PNGs.
+Response: `{ url, title, region, ms, captures: [{ viewport: [w, h], capture }] }` — each `capture` is exactly what the bookmarklet produces, plus rasterised video frames / glyphs / filtered or transformed elements as inline PNGs, `capture.fonts` (the `@font-face` files the page loaded) and optionally `capture.screenshot`.
 
-`GET /healthz` → `{ ok, region, browser, inflight }`
+`POST /fonts` `{ faces: capture.fonts }` → `{ files: [{ family, weight, style, name, data }] }` — the page's woff2 files decoded to installable TTF/OTF (base64). Font licences belong to the site owner.
+
+`POST /diff` `{ reference: dataURL, candidate: dataURL, cell?: 24 }` → `{ similarity, width, height, diff, regions }` — pixel comparison of the page screenshot with an exported Figma frame; `diff` is a PNG heat-map, `regions` the worst grid cells. Body limit 80 MB.
+
+`GET /healthz` → `{ ok, region, browser, inflight, features }`
 
 Concurrency: `H2F_MAX_INFLIGHT` (default 2) captures per instance; over that returns 429. Each capture uses ~300–600 MB peak, so the 2 GB machine size in `fly.toml` is deliberate.
 
