@@ -1,8 +1,10 @@
 /**
  * html2figma capture server
  *
- *   POST /capture   { url, widths?: [1920, 390], region?: "ams", hideSelectors?: [], waitFor?: css, timeoutMs?, screenshot?: true }
+ *   POST /capture   { url, widths?: [1920, 390], region?: "ams", hideSelectors?: [], waitFor?: css, timeoutMs?, screenshot?: true, async?: true }
  *                   → { url, title, captures: [{ viewport: [w, h], capture }] }   (capture.screenshot = full-page JPEG when asked)
+ *                   with async: true → 202 { jobId } at once; then
+ *   GET  /jobs/:id  → { status: queued|running|done|error, stage, message, progress 0..1, widthIndex, elapsedMs, result?, error? }
  *   POST /fonts     { faces: [{family, weight, style, url, file}] } → { files: [{name, data(base64 ttf/otf)}] }
  *   POST /diff      { reference: dataURL, candidate: dataURL, cell? } → { similarity, diff: dataURL, regions: [{x,y,w,h,pct}] }
  *   GET  /healthz   → { ok, region, browser, features }
@@ -61,7 +63,7 @@ function browser() {
 }
 
 // ---------- one viewport ----------
-async function captureViewport(b, opts, width) {
+async function captureViewport(b, opts, width, report = () => {}) {
   const mobile = width < 768;
   const ctx = await b.newContext({
     viewport: { width, height: mobile ? 844 : 1080 },
@@ -76,16 +78,20 @@ async function captureViewport(b, opts, width) {
   const page = await ctx.newPage();
   page.setDefaultTimeout(opts.timeoutMs);
   try {
+    report('load', 0.02, 'Loading page');
     await page.goto(opts.url, { waitUntil: 'domcontentloaded', timeout: opts.timeoutMs });
+    report('load', 0.15, 'Waiting for the page to settle');
     await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
     if (opts.waitFor) await page.waitForSelector(opts.waitFor, { timeout: 15000 }).catch(() => {});
     await page.addScriptTag({ content: CORE });
 
     // warm up (lazy images/sections), then let videos reach a frame
+    report('warmup', 0.3, 'Scrolling through the page (lazy content)');
     await page.evaluate(() => window.__h2f.warmUp(600, 120));
     await page.evaluate(() => Promise.all([...document.querySelectorAll('video')].map(v => { try { v.muted = true; return v.play().catch(() => {}); } catch { return null; } })));
     await page.waitForTimeout(600);
 
+    report('extract', 0.45, 'Reading layout and styles');
     const cap = await page.evaluate(({ hide }) => {
       const c = window.__h2f.extract({ hideSelectors: hide, markForRaster: true });
       return c;
@@ -94,23 +100,50 @@ async function captureViewport(b, opts, width) {
     // Fetch images server-side with the page's cookies. (Doing it in-page via canvas, as the
     // bookmarklet does, decodes every image at full size inside the renderer — too heavy for a 1 GB box.)
     const capture = cap;
+    let nImg = 0; (function c(n) { if (n.img || (n.s && n.s.bgi)) nImg++; (n.c || []).forEach(c); })(capture.tree);
+    report('images', 0.6, `Fetching ${nImg} images`);
     await fetchRemaining(ctx, capture);
 
     // rasterise the marked elements
+    let nShot = 0; (function c(n) { if (n.shot) nShot++; (n.c || []).forEach(c); })(capture.tree);
+    report('raster', 0.8, nShot ? `Screenshotting ${nShot} elements (video, icons, filters)` : 'Finishing');
     await rasterise(page, capture);
 
     // reference screenshot of the whole page (what the build is compared against in Figma)
     if (opts.screenshot) {
+      report('screenshot', 0.92, 'Taking the reference screenshot');
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.waitForTimeout(150);
       const png = await page.screenshot({ fullPage: true, type: 'jpeg', quality: 88, animations: 'disabled', timeout: 30000 }).catch(() => null);
       if (png) capture.screenshot = 'data:image/jpeg;base64,' + png.toString('base64');
     }
 
+    report('done', 1, 'Done');
     return { viewport: capture.viewport, capture };
   } finally {
     await ctx.close().catch(() => {});
   }
+}
+
+// ---------- jobs (async captures: the plugin polls for progress instead of holding one long request) ----------
+const jobs = new Map();
+const JOB_TTL = 10 * 60 * 1000;
+function newJob(widths) {
+  const id = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  const job = { id, status: 'queued', widths, widthIndex: 0, stage: 'queued', progress: 0, message: 'Waiting for a browser', startedAt: Date.now(), result: null, error: null };
+  jobs.set(id, job);
+  setTimeout(() => jobs.delete(id), JOB_TTL).unref();
+  return job;
+}
+async function runCapture(opts, widths, job) {
+  const b = await browser();
+  const captures = [];
+  for (let i = 0; i < widths.length; i++) {
+    const w = widths[i];
+    const report = (stage, frac, message) => { if (!job) return; job.status = 'running'; job.widthIndex = i; job.stage = stage; job.message = `${w}px · ${message}`; job.progress = (i + frac) / widths.length; };
+    captures.push(await captureViewport(b, opts, w, report));   // sequential: predictable memory
+  }
+  return captures;
 }
 
 // CDN resize hints (Shopify `?width=72`, `_64x64.`, Cloudinary `w_72`): ask for 2x the displayed size so
@@ -261,7 +294,17 @@ const MAX_INFLIGHT = Number(process.env.H2F_MAX_INFLIGHT || 2);
 
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization, x-api-key, content-type', 'access-control-allow-methods': 'POST, GET, OPTIONS' }); return res.end(); }
-  if (req.url === '/healthz') return json(res, 200, { ok: true, region: REGION, browser: browserName || null, inflight, features: ['screenshot', 'fonts', 'diff'] });
+  if (req.url === '/healthz') return json(res, 200, { ok: true, region: REGION, browser: browserName || null, inflight, features: ['screenshot', 'fonts', 'diff', 'jobs'] });
+  const jobM = req.method === 'GET' && req.url.match(/^\/jobs\/([a-z0-9]+)$/);
+  if (jobM) {
+    if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
+    const job = jobs.get(jobM[1]);
+    if (!job) return json(res, 404, { error: 'unknown or expired job' });
+    const { result, ...status } = job;
+    status.elapsedMs = Date.now() - job.startedAt;
+    if (job.status === 'done') { jobs.delete(job.id); return json(res, 200, { ...status, result }); }   // one-shot: the result is large
+    return json(res, 200, status);
+  }
   if (req.method !== 'POST' || !['/capture', '/fonts', '/diff'].includes(req.url)) return json(res, 404, { error: 'not found' });
   if (!authed(req)) return json(res, 401, { error: 'unauthorized' });
 
@@ -293,20 +336,31 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'fly-replay': `region=${body.region}` }); return res.end();
   }
   if (inflight >= MAX_INFLIGHT) return json(res, 429, { error: 'busy, retry shortly' });
+  const opts = { url, hideSelectors: body.hideSelectors, waitFor: body.waitFor, timeoutMs: Math.min(Number(body.timeoutMs) || 45000, 120000), locale: body.locale, timezone: body.timezone, headers: body.headers, cookies: body.cookies, screenshot: !!body.screenshot };
+  const friendly = e => { const msg = String(e.message || e); return /Target crashed|Target closed|out of memory/i.test(msg)
+    ? 'Browser tab crashed (usually out of memory). Give the service more RAM (Railway: Hobby plan; Fly: memory = "2gb") or capture one width at a time.'
+    : msg.slice(0, 300); };
+
+  // async mode: answer at once with a job id; the client polls GET /jobs/:id for stage + progress, then gets the result
+  if (body.async) {
+    const job = newJob(widths);
+    inflight++;
+    const t0 = Date.now();
+    runCapture(opts, widths, job)
+      .then(captures => { job.result = { url, title: captures[0].capture.title, region: REGION, ms: Date.now() - t0, captures }; job.status = 'done'; job.progress = 1; job.message = 'Done'; })
+      .catch(e => { console.error('capture failed', url, e); job.status = 'error'; job.error = friendly(e); })
+      .finally(() => { inflight--; });
+    return json(res, 202, { jobId: job.id, poll: `/jobs/${job.id}` });
+  }
+
   inflight++;
   const t0 = Date.now();
   try {
-    const b = await browser();
-    const opts = { url, hideSelectors: body.hideSelectors, waitFor: body.waitFor, timeoutMs: Math.min(Number(body.timeoutMs) || 45000, 120000), locale: body.locale, timezone: body.timezone, headers: body.headers, cookies: body.cookies, screenshot: !!body.screenshot };
-    const captures = [];
-    for (const w of widths) captures.push(await captureViewport(b, opts, w));   // sequential: predictable memory
+    const captures = await runCapture(opts, widths, null);
     json(res, 200, { url, title: captures[0].capture.title, region: REGION, ms: Date.now() - t0, captures });
   } catch (e) {
     console.error('capture failed', url, e);
-    const msg = String(e.message || e);
-    json(res, 500, { error: /Target crashed|Target closed|out of memory/i.test(msg)
-      ? 'Browser tab crashed (usually out of memory). Give the service more RAM (Railway: Hobby plan; Fly: memory = "2gb") or capture one width at a time.'
-      : msg.slice(0, 300) });
+    json(res, 500, { error: friendly(e) });
   } finally { inflight--; }
 });
 

@@ -39,6 +39,22 @@ for (const { viewport, capture } of out.captures || []) {
   check(!!face && face.weight === '500' && /CaladeaBold\.woff2$/.test(face.file) && /^http/.test(face.url), `${viewport[0]}: loaded @font-face recorded (${JSON.stringify(face)})`);
   writeFileSync(`test/capture-${viewport[0]}.json`, JSON.stringify(capture));
 }
+// async mode: 202 + job id, progress moves through the stages, result arrives once
+{
+  const r = await fetch('http://127.0.0.1:8123/capture', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: 'http://localhost:8099/', widths: [1280, 390], async: true }) });
+  const j = await r.json(); const stages = new Set(); let last = null, polls = 0;
+  check(r.status === 202 && /^[a-z0-9]+$/.test(j.jobId || ''), `async capture answers 202 with a job id (${j.jobId})`);
+  while (polls++ < 200) {
+    await new Promise(res => setTimeout(res, 300));
+    const st = await (await fetch('http://127.0.0.1:8123/jobs/' + j.jobId)).json();
+    last = st; if (st.stage) stages.add(st.stage);
+    if (st.status === 'done' || st.status === 'error') break;
+  }
+  check(last && last.status === 'done' && last.result && last.result.captures.length === 2, `job finished with 2 captures after ${polls} polls (${last && (last.error || last.status)})`);
+  check(stages.size >= 3 && [...stages].some(s => /load|extract|images|raster/.test(s)), `progress reported real stages: ${[...stages].join(' → ')}`);
+  const gone = await fetch('http://127.0.0.1:8123/jobs/' + j.jobId);
+  check(gone.status === 404, 'result is handed out once, then the job is dropped');
+}
 if (out.captures) {
   const first = out.captures[0].capture;
   writeFileSync('test/capture.json', JSON.stringify(first));

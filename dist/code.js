@@ -684,8 +684,30 @@
       } else if (msg.type === "captureUrl") {
         const { server, apiKey, url, widths, region } = msg;
         if (!/^https?:\/\//.test(server || "")) throw new Error("Set the capture server URL first (https://\u2026).");
-        figma.ui.postMessage({ type: "status", text: `Capturing ${url} at ${widths.join(", ")}\u2026 this takes 10\u201360 s` });
-        const data = await postJson(server, apiKey, "/capture", { url, widths, region: region || void 0, screenshot: msg.reference !== false || !!msg.diff });
+        const t0 = Date.now();
+        figma.ui.postMessage({ type: "capture", stage: "queued", message: "Contacting the capture server", progress: 0, elapsed: 0, widths });
+        const body = { url, widths, region: region || void 0, screenshot: msg.reference !== false || !!msg.diff };
+        let data;
+        try {
+          const job = await postJson(server, apiKey, "/capture", { ...body, async: true });
+          if (!job.jobId) throw new Error("no job id");
+          for (; ; ) {
+            await new Promise((r) => setTimeout(r, 700));
+            const res = await fetch(server.replace(/\/$/, "") + "/jobs/" + job.jobId, { headers: apiKey ? { authorization: "Bearer " + apiKey } : {} });
+            const st = await res.json();
+            if (!res.ok) throw new Error(st.error || `Server returned ${res.status}`);
+            if (st.status === "error") throw new Error(st.error || "capture failed");
+            figma.ui.postMessage({ type: "capture", stage: st.stage, message: st.message, progress: st.progress, elapsed: (Date.now() - t0) / 1e3, widthIndex: st.widthIndex, widths });
+            if (st.status === "done") {
+              data = st.result;
+              break;
+            }
+          }
+        } catch (e) {
+          if (!/no job id|not found|404/.test(String(e && e.message))) throw e;
+          figma.ui.postMessage({ type: "capture", stage: "running", message: "Capturing (server without progress reporting)", progress: -1, elapsed: (Date.now() - t0) / 1e3, widths });
+          data = await postJson(server, apiKey, "/capture", body);
+        }
         figma.ui.postMessage({ type: "status", text: `Captured in ${(data.ms / 1e3).toFixed(1)} s (region ${data.region}). Building\u2026` });
         await buildCaptures(data.captures.map((c) => c.capture), msg);
       } else if (msg.type === "downloadFonts") {
