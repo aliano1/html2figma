@@ -298,6 +298,7 @@ function fontFaces() {
       const m = (st.getPropertyValue('src') || '').match(/url\(["']?([^"')]+)["']?\)/);
       if (!family || !m) continue;
       let url = m[1]; try { url = new URL(url, ss.href || location.href).href; } catch (_) { /* keep */ }
+      if (!/^https?:/.test(url)) continue;   // inline data: fonts (icon fonts) can't be offered as files
       const key = family.toLowerCase() + '|' + weight + '|' + style;
       const isLoaded = loaded.has(key) || [...loaded].some(k => k.startsWith(family.toLowerCase() + '|') && k.endsWith('|' + style) && weightMatches(k.split('|')[1], weight));
       if (seen.has(key + url)) continue; seen.add(key + url);

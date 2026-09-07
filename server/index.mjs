@@ -177,8 +177,9 @@ async function rasterise(page, capture) {
 // The user is responsible for the font's licence — the plugin says so next to the button.
 async function fontFiles(ctx, faces) {
   const { decompress } = await import('wawoff2');
-  const out = [];
+  const out = []; const seen = new Set();
   for (const f of faces.slice(0, 24)) {
+    if (seen.has(f.url)) continue; seen.add(f.url);
     try {
       const res = await ctx.request.get(f.url, { timeout: 15000 });
       if (!res.ok()) { out.push({ ...f, error: 'HTTP ' + res.status() }); continue; }
