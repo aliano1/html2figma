@@ -66,6 +66,28 @@ export class Accounts {
       text: `Here is your sign-in link for ${this.productName}. It works once and expires in 30 minutes.\n\n${this.link(email, req)}\n\nIf you did not request it, ignore this email.` });
     return { ok: true };
   }
+  /** Free tier sign-up: creates the account on first sight, then behaves exactly like requestLink. */
+  async signup(req, emailRaw, ip = '') {
+    const email = String(emailRaw || '').trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { ok: false, error: 'That does not look like an email address.' };
+    if (this.throttledIp(ip)) return { ok: false, error: 'Too many sign-ups from this network — try again in an hour.' };
+    if (!(await this.db.accountByEmail(email))) {
+      await this.db.createAccount(email, 'free');
+      if (!this.throttled(email)) await this.mailer.send({ to: email, subject: `Your free ${this.productName} account`,
+        text: `Welcome to ${this.productName}. Your free plan includes ${this.freeCredits} captures a month.\n\nOpen your account page to create a license key, then paste it into the Figma plugin under From URL → License key:\n\n${this.link(email, req)}\n\nThe link works for 30 minutes; request a new one any time at ${this.base(req)}/account.` });
+      return { ok: true };
+    }
+    return this.requestLink(req, email);
+  }
+  throttledIp(ip) {
+    if (!ip) return false;
+    const now = Date.now(); const list = (this.recent.get('ip:' + ip) || []).filter(t => now - t < 60 * 60e3);
+    this.recent.set('ip:' + ip, list);
+    if (list.length >= 10) return true;
+    list.push(now); return false;
+  }
+  get freeCredits() { return this.db.limits({ plan: 'free' }).credits; }
+
   /** After the first paid checkout: receipt-style welcome with the account link. */
   async sendWelcome(account, req = null) {
     const base = this.base(req);
@@ -124,6 +146,12 @@ ${newKey ? `<h2 style="font-size:18px">Your new license key</h2><p>Shown <b>once
     if (u.pathname === '/account/link' && req.method === 'POST') {
       const f = await form(); const email = f.get('email') || '';
       const r = await this.requestLink(req, email);
+      return html(r.ok ? 200 : 400, this.signInPage({ email, sent: r.ok, error: r.error }));
+    }
+    if (u.pathname === '/account/signup' && req.method === 'POST') {
+      const f = await form(); const email = f.get('email') || '';
+      const ip = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0].trim();
+      const r = await this.signup(req, email, ip);
       return html(r.ok ? 200 : 400, this.signInPage({ email, sent: r.ok, error: r.error }));
     }
     if (u.pathname === '/account/key' && req.method === 'POST') {

@@ -1,6 +1,6 @@
 {
   "name": "html2figma",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "description": "Capture any rendered web page (bookmarklet) and rebuild it as editable Figma layers (plugin).",
   "type": "module",

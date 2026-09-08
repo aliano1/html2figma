@@ -93,6 +93,21 @@ check(noToken.status === 401, 'minting without a token is refused');
 const portalNoBilling = await fetch(S + '/portal?token=' + encodeURIComponent(t), { redirect: 'manual' });
 check(portalNoBilling.status === 404, 'portal without Stripe configured → 404 (still needs a valid token)');
 
+// 6. landing page + free sign-up
+const landing = await fetch(S + '/'); const landingHtml = await landing.text();
+check(landing.status === 200 && /<h1>Any web page/.test(landingHtml) && /\$15/.test(landingHtml) && /\$49/.test(landingHtml) && /10 credits a month/.test(landingHtml), 'landing page served at / with prices from billing.mjs and limits from db.mjs');
+check(/action="\/account\/signup"/.test(landingHtml) && /Checkout not enabled/.test(landingHtml), 'free sign-up form present; buy buttons hidden without Stripe');
+check(/coming soon/.test(landingHtml), 'plugin install shows "coming soon" until H2F_PLUGIN_URL is set');
+const su = await form('/account/signup', { email: 'newbie@free.tier' });
+check(su.status === 200 && /Check your email/.test(await su.text()), 'POST /account/signup answers "check your email"');
+const newbie = await db.accountByEmail('newbie@free.tier');
+check(newbie && newbie.plan === 'free', 'sign-up created a free account');
+const suAgain = await form('/account/signup', { email: 'newbie@free.tier' });
+check(suAgain.status === 200 && (await db.pool.query("select count(*)::int as n from accounts where email='newbie@free.tier'")).rows[0].n === 1, 'signing up twice is just a sign-in link, not a second account');
+check((await form('/account/signup', { email: 'nope' })).status === 400, 'malformed sign-up email refused');
+const install = await fetch(S + '/install');
+check(install.status === 200 && /bookmarklet/i.test(await install.text()), '/install serves the bookmarklet page');
+
 proc.kill('SIGTERM');
 await db.close();
 console.log(fails ? `\n${fails} check(s) failed` : '\nall account checks passed');

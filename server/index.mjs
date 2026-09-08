@@ -32,6 +32,8 @@ import { assertPublicUrl, guardContext } from './safety.mjs';
 import { Billing, welcomePage, page as htmlPage } from './billing.mjs';
 import { Mailer, escapeHtml } from './mail.mjs';
 import { Accounts } from './account.mjs';
+import { landingPage } from './landing.mjs';
+import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -366,9 +368,18 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization, x-api-key, content-type', 'access-control-allow-methods': 'POST, GET, DELETE, OPTIONS' }); return res.end(); }
     if (req.url === '/healthz') return json(res, 200, { ok: true, region: REGION, browser: browserName || null, inflight, mode: db ? 'multi-tenant' : 'single-tenant', features: ['screenshot', 'fonts', 'diff', 'jobs', ...(db ? ['accounts'] : []), ...(billing ? ['billing'] : []), ...(mailer?.configured ? ['email'] : [])] });
 
-    // ---- customer pages (public; a signed email link is the authentication) ----
+    // ---- public pages: landing, bookmarklet install, account (a signed email link is the authentication) ----
     if (accounts) {
       const u = new URL(req.url, 'http://x');
+      const html = (status, body, extra = {}) => { res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', ...extra }); res.end(body); };
+      if (req.method === 'GET' && u.pathname === '/') {
+        accounts.base(req);
+        return html(200, landingPage({ billing: !!billing, signup: true, pluginUrl: process.env.H2F_PLUGIN_URL || '', supportEmail: process.env.H2F_SUPPORT_EMAIL || '' }), { 'cache-control': 'public, max-age=300' });
+      }
+      if (req.method === 'GET' && u.pathname === '/install') {
+        const f = join(__dirname, '..', 'dist', 'install.html');
+        return existsSync(f) ? html(200, readFileSync(f, 'utf8'), { 'cache-control': 'public, max-age=300' }) : json(res, 404, { error: 'run npm run build' });
+      }
       if (/^\/(account|portal)(\/|$)/.test(u.pathname) && await accounts.handle(req, res, u, readBody)) return;
     }
     // ---- billing pages (public; Stripe Checkout does the authentication) ----

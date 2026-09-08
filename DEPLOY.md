@@ -83,6 +83,12 @@ Email goes out through [Resend](https://resend.com) (free tier is plenty to star
 
 Until `RESEND_API_KEY` is set nothing is sent: links are printed in the server log instead, which is enough for development. `/healthz` lists `email` once mail is configured.
 
+### The landing page: `/`
+
+In multi-tenant mode the server's root is a complete marketing page — what the product does, how it works, pricing (numbers come from `server/billing.mjs` and `server/db.mjs`, so they can't drift from what's charged and enforced), a **Start free** form that creates a Free account and emails the sign-in link (`POST /account/signup`, 10 per hour per IP), the Pro/Team checkout buttons, and a FAQ. `/install` serves the bookmarklet page from `dist/`. Point your domain at the service (Railway → Settings → Networking → Custom Domain) and set `H2F_PUBLIC_URL` to it.
+
+Optional variables: `H2F_PLUGIN_URL` (the Figma Community URL once the plugin is published — until then the hero says "coming soon"), `H2F_SUPPORT_EMAIL` (shown in the footer and FAQ).
+
 With a merchant-of-record setup (Stripe Managed Payments, when enabled on your account) tax is handled by Stripe; on a standard account add Stripe Tax to the Checkout Session (`automatic_tax: { enabled: true }` in `server/billing.mjs`) once you've registered where required.
 
 What the server enforces once strangers hold keys: only public http(s) hosts are captured (private ranges, localhost, cloud metadata addresses and non-standard ports are refused, and every request the page makes — including redirects and iframes — is checked again inside the browser), captures over `H2F_MAX_CAPTURE_MB` (default 60) are rejected, and the job queue lives in Postgres so several replicas can share it.
