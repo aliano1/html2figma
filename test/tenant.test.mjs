@@ -53,16 +53,32 @@ check(last.status === 'done' && last.result && last.result.captures.length === 2
 check(stages.size >= 3, `progress stages recorded in Postgres: ${[...stages].join(' → ')}`);
 check((await api('/jobs/' + job.jobId, key)).status === 404, 'result delivered once, row removed');
 
+// queue position + cancellation: two jobs, the second reports 1 ahead; cancelling a queued job removes it
+admin('plan', 'ali@example.com', 'unlimited');
+{
+  const a = await (await api('/capture', key, { url: 'http://localhost:8099/', widths: [390], async: true })).json();
+  const b = await (await api('/capture', key, { url: 'http://localhost:8099/', widths: [390], async: true })).json();
+  await new Promise(r => setTimeout(r, 200));
+  const sb = await (await api('/jobs/' + b.jobId, key)).json();
+  check(sb.status === 'queued' || sb.status === 'running', `second job accepted (${sb.status}${sb.position !== undefined ? ', ' + sb.position + ' ahead' : ''}${sb.message ? ': ' + sb.message : ''})`);
+  const del = await (await api('/jobs/' + b.jobId, key, null, 'DELETE')).json();
+  check(del.cancelled === true, 'cancelling the queued job succeeds');
+  check((await api('/jobs/' + b.jobId, key)).status === 404, 'cancelled job is gone');
+  let last; for (let i = 0; i < 200; i++) { await new Promise(r => setTimeout(r, 300)); last = await (await api('/jobs/' + a.jobId, key)).json(); if (last.status === 'done' || last.status === 'error') break; }
+  check(last.status === 'done', 'the first job still completes');
+}
+admin('plan', 'ali@example.com', 'free', '3');
 // metering
 const me2 = await (await api('/me', key)).json();
-check(me2.used === 2 && me2.remaining === 1, `usage metered: 2 credits used, 1 left (${me2.used}/${me2.credits})`);
+check(me2.used === 3 && me2.remaining === 0, `usage metered: 3 credits used, 0 left (${me2.used}/${me2.credits})`);
 const over = await api('/capture', key, { url: 'http://localhost:8099/', widths: [1280, 390] });
 check(over.status === 402, `over quota → 402 (${over.status}: ${(await over.json()).error})`);
+admin('plan', 'ali@example.com', 'free', '4');
 const okOne = await api('/capture', key, { url: 'http://localhost:8099/', widths: [390] });
 check(okOne.status === 200 && (await okOne.json()).captures.length === 1, 'sync capture within the remaining credit succeeds');
 check((await api('/capture', key, { url: 'http://localhost:8099/', widths: [390] })).status === 402, 'then the account is out of credits');
 const usage = admin('usage', 'ali@example.com');
-check(/3\/3 credits used/.test(usage), `admin usage view: ${usage.split('\n')[0]}`);
+check(/4\/4 credits used/.test(usage), `admin usage view: ${usage.split('\n')[0]}`);
 
 // plan limits: free allows 2 widths per capture
 admin('plan', 'ali@example.com', 'free');

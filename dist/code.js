@@ -538,6 +538,9 @@
 
   // src/plugin/code.ts
   figma.showUI(__html__, { width: 400, height: 600, themeColors: true });
+  figma.on("close", () => {
+    void cancelCurrentJob();
+  });
   async function fetchImage(url) {
     try {
       const res = await fetch(url);
@@ -553,6 +556,16 @@
     return { x: x ? x + 200 : 0, y: 0 };
   }
   var GAP = 120;
+  var currentJob = null;
+  async function cancelCurrentJob() {
+    const j = currentJob;
+    currentJob = null;
+    if (!j) return;
+    try {
+      await fetch(j.server.replace(/\/$/, "") + "/jobs/" + j.id, { method: "DELETE", headers: j.apiKey ? { authorization: "Bearer " + j.apiKey } : {} });
+    } catch (_) {
+    }
+  }
   function imageFrame(dataUrl, w, h, name) {
     try {
       const bytes = figma.base64Decode(dataUrl.slice(dataUrl.indexOf(",") + 1));
@@ -689,8 +702,10 @@
         const body = { url, widths, region: region || void 0, screenshot: msg.reference !== false || !!msg.diff };
         let data;
         try {
+          await cancelCurrentJob();
           const job = await postJson(server, apiKey, "/capture", { ...body, async: true });
           if (!job.jobId) throw new Error("no job id");
+          currentJob = { server, apiKey, id: job.jobId };
           for (; ; ) {
             await new Promise((r) => setTimeout(r, 700));
             const res = await fetch(server.replace(/\/$/, "") + "/jobs/" + job.jobId, { headers: apiKey ? { authorization: "Bearer " + apiKey } : {} });
@@ -700,10 +715,12 @@
             figma.ui.postMessage({ type: "capture", stage: st.stage, message: st.message, progress: st.progress, elapsed: (Date.now() - t0) / 1e3, widthIndex: st.widthIndex, widths });
             if (st.status === "done") {
               data = st.result;
+              currentJob = null;
               break;
             }
           }
         } catch (e) {
+          currentJob = null;
           if (!/no job id|not found|404/.test(String(e && e.message))) throw e;
           figma.ui.postMessage({ type: "capture", stage: "running", message: "Capturing (server without progress reporting)", progress: -1, elapsed: (Date.now() - t0) / 1e3, widths });
           data = await postJson(server, apiKey, "/capture", body);
@@ -721,7 +738,11 @@
       } else if (msg.type === "downloadFonts") {
         const data = await postJson(msg.server, msg.apiKey, "/fonts", { faces: msg.faces });
         figma.ui.postMessage({ type: "fontFiles", family: msg.family, files: data.files });
+      } else if (msg.type === "cancel") {
+        await cancelCurrentJob();
+        figma.ui.postMessage({ type: "error", message: "Capture cancelled." });
       } else if (msg.type === "close") {
+        await cancelCurrentJob();
         figma.closePlugin();
       }
     } catch (e) {

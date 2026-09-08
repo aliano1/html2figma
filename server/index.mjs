@@ -275,10 +275,11 @@ function memJob(widths) {
   return job;
 }
 
-async function runCapture(opts, widths, report) {
+async function runCapture(opts, widths, report, cancelled = async () => false) {
   const b = await browser();
   const captures = [];
   for (let i = 0; i < widths.length; i++) {
+    if (await cancelled()) return null;
     const w = widths[i];
     const rep = (stage, frac, message) => report && report({ stage, message: `${w}px · ${message}`, progress: (i + frac) / widths.length, widthIndex: i });
     captures.push(await captureViewport(b, opts, w, rep));   // sequential: predictable memory
@@ -306,7 +307,8 @@ async function workerTick() {
     if (now - lastWrite > 300) { lastWrite = now; db.progress(job.id, p).catch(() => {}); pending = null; }
   };
   try {
-    const captures = await runCapture(req.opts, req.widths, report);
+    const captures = await runCapture(req.opts, req.widths, report, () => db.isCancelled(job.id));
+    if (!captures) { await db.remove(job.id); return; }   // cancelled by the user
     const result = { url: req.opts.url, title: captures[0].capture.title, region: REGION, ms: Date.now() - t0, captures };
     await db.finish(job.id, result);
     await db.recordUsage({ accountId: job.account_id, keyHash: job.key_hash, url: req.opts.url, widths: req.widths, credits: req.widths.length, ms: Date.now() - t0, status: 'done', region: REGION });
@@ -350,7 +352,7 @@ const jobView = (j, elapsedMs) => ({ id: j.id, status: j.status, stage: j.stage,
 
 const server = http.createServer(async (req, res) => {
   try {
-    if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization, x-api-key, content-type', 'access-control-allow-methods': 'POST, GET, OPTIONS' }); return res.end(); }
+    if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization, x-api-key, content-type', 'access-control-allow-methods': 'POST, GET, DELETE, OPTIONS' }); return res.end(); }
     if (req.url === '/healthz') return json(res, 200, { ok: true, region: REGION, browser: browserName || null, inflight, mode: db ? 'multi-tenant' : 'single-tenant', features: ['screenshot', 'fonts', 'diff', 'jobs', ...(db ? ['accounts'] : [])] });
 
     const auth = await authenticate(req);
@@ -363,15 +365,19 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ---- GET /jobs/:id ----
-    const jobM = req.method === 'GET' && req.url.match(/^\/jobs\/([a-z0-9]+)$/);
+    const jobM = (req.method === 'GET' || req.method === 'DELETE') && req.url.match(/^\/jobs\/([a-z0-9]+)$/);
     if (jobM) {
       if (db) {
+        if (req.method === 'DELETE') return json(res, 200, { cancelled: await db.cancel(jobM[1], auth.kind === 'user' ? auth.account.id : null) });
         const j = await db.get(jobM[1], auth.kind === 'user' ? auth.account.id : null);
         if (!j) return json(res, 404, { error: 'unknown or expired job' });
         const elapsedMs = Date.now() - new Date(j.created_at).getTime();
         if (j.status === 'done') { await db.remove(j.id); return json(res, 200, { ...jobView(j, elapsedMs), result: j.result }); }   // one-shot
-        return json(res, 200, jobView(j, elapsedMs));
+        const view = jobView(j, elapsedMs);
+        if (j.status === 'queued') { const ahead = await db.position(j.id); view.position = ahead; view.message = ahead ? `Waiting in the queue — ${ahead} capture${ahead === 1 ? '' : 's'} ahead of you` : 'Waiting for a browser'; }
+        return json(res, 200, view);
       }
+      if (req.method === 'DELETE') { const job = memJobs.get(jobM[1]); if (job && job.status === 'queued') memJobs.delete(job.id); return json(res, 200, { cancelled: !!job }); }
       const job = memJobs.get(jobM[1]);
       if (!job) return json(res, 404, { error: 'unknown or expired job' });
       const elapsedMs = Date.now() - job.startedAt;

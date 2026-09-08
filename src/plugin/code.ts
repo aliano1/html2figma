@@ -2,6 +2,7 @@
 import { build, Capture, FontReport } from './builder';
 
 figma.showUI(__html__, { width: 400, height: 600, themeColors: true });
+figma.on('close', () => { void cancelCurrentJob(); });
 
 async function fetchImage(url: string): Promise<Uint8Array | null> {
   try {
@@ -18,6 +19,12 @@ function findFreeSpot(): { x: number; y: number } {
 }
 
 const GAP = 120;
+let currentJob: { server: string; apiKey: string; id: string } | null = null;
+async function cancelCurrentJob() {
+  const j = currentJob; currentJob = null;
+  if (!j) return;
+  try { await fetch(j.server.replace(/\/$/, '') + '/jobs/' + j.id, { method: 'DELETE', headers: j.apiKey ? { authorization: 'Bearer ' + j.apiKey } : {} }); } catch (_) { /* best effort */ }
+}
 
 function imageFrame(dataUrl: string, w: number, h: number, name: string): RectangleNode | null {
   try {
@@ -128,8 +135,10 @@ figma.ui.onmessage = async (msg: any) => {
       let data: any;
       try {
         // async job + polling: the panel shows what the server is doing instead of a frozen bar
+        await cancelCurrentJob();   // a capture the user abandoned (closed the panel, clicked again) must not keep a browser busy
         const job = await postJson(server, apiKey, '/capture', { ...body, async: true });
         if (!job.jobId) throw new Error('no job id');
+        currentJob = { server, apiKey, id: job.jobId };
         for (;;) {
           await new Promise(r => setTimeout(r, 700));
           const res = await fetch(server.replace(/\/$/, '') + '/jobs/' + job.jobId, { headers: apiKey ? { authorization: 'Bearer ' + apiKey } : {} });
@@ -137,9 +146,10 @@ figma.ui.onmessage = async (msg: any) => {
           if (!res.ok) throw new Error(st.error || `Server returned ${res.status}`);
           if (st.status === 'error') throw new Error(st.error || 'capture failed');
           figma.ui.postMessage({ type: 'capture', stage: st.stage, message: st.message, progress: st.progress, elapsed: (Date.now() - t0) / 1000, widthIndex: st.widthIndex, widths });
-          if (st.status === 'done') { data = st.result; break; }
+          if (st.status === 'done') { data = st.result; currentJob = null; break; }
         }
       } catch (e: any) {
+        currentJob = null;
         // older server without /jobs → one long request
         if (!/no job id|not found|404/.test(String(e && e.message))) throw e;
         figma.ui.postMessage({ type: 'capture', stage: 'running', message: 'Capturing (server without progress reporting)', progress: -1, elapsed: (Date.now() - t0) / 1000, widths });
@@ -157,7 +167,11 @@ figma.ui.onmessage = async (msg: any) => {
       // the page's own webfont files, converted to installable TTF/OTF by the server
       const data = await postJson(msg.server, msg.apiKey, '/fonts', { faces: msg.faces });
       figma.ui.postMessage({ type: 'fontFiles', family: msg.family, files: data.files });
+    } else if (msg.type === 'cancel') {
+      await cancelCurrentJob();
+      figma.ui.postMessage({ type: 'error', message: 'Capture cancelled.' });
     } else if (msg.type === 'close') {
+      await cancelCurrentJob();
       figma.closePlugin();
     }
   } catch (e: any) {

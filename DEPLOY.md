@@ -109,7 +109,7 @@ Point the plugin's Server URL at `http://localhost:8080`. (Figma desktop allows 
 | `cookies` | Playwright cookie[] | for logged-in captures |
 | `headers` | object | extra request headers |
 | `screenshot` | boolean | also return a full-page JPEG of each viewport in `capture.screenshot` (the plugin's reference/diff features need it) |
-| `async` | boolean | answer `202 { jobId }` immediately; poll `GET /jobs/:id` → `{ status, stage, message, progress, widthIndex, elapsedMs }` and, once `status` is `done`, `result` (delivered once). The plugin uses this to show live progress. |
+| `async` | boolean | answer `202 { jobId }` immediately; poll `GET /jobs/:id` → `{ status, stage, message, progress, widthIndex, elapsedMs, position? }` and, once `status` is `done`, `result` (delivered once). `DELETE /jobs/:id` cancels (a queued job is dropped; a running one stops at the next width). The plugin uses this for live progress, queue position and the Cancel button, and cancels a job when its panel is closed. |
 
 Response: `{ url, title, region, ms, captures: [{ viewport: [w, h], capture }] }` — each `capture` is exactly what the bookmarklet produces, plus rasterised video frames / glyphs / filtered or transformed elements as inline PNGs, `capture.fonts` (the `@font-face` files the page loaded) and optionally `capture.screenshot`.
 

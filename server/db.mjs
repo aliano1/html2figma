@@ -163,10 +163,27 @@ export class Db {
     const r = await this.pool.query('select * from jobs where id=$1 and ($2::uuid is null or account_id=$2)', [id, accountId]);
     return r.rows[0] || null;
   }
+  /** how many queued jobs are ahead of this one */
+  async position(id) {
+    const r = await this.pool.query("select count(*)::int as n from jobs where status='queued' and created_at < (select created_at from jobs where id=$1)", [id]);
+    return r.rows[0].n;
+  }
+  /** cancel: a queued job disappears; a running one is flagged and the worker stops at the next stage boundary */
+  async cancel(id, accountId) {
+    const j = await this.get(id, accountId);
+    if (!j) return false;
+    if (j.status === 'queued') { await this.remove(id); return true; }
+    if (j.status === 'running') { await this.pool.query("update jobs set status='cancelled', updated_at=now() where id=$1", [id]); return true; }
+    return false;
+  }
+  async isCancelled(id) {
+    const r = await this.pool.query('select status from jobs where id=$1', [id]);
+    return !r.rows[0] || r.rows[0].status === 'cancelled';
+  }
   async remove(id) { await this.pool.query('delete from jobs where id=$1', [id]); }
   async sweep() {
     // stale running jobs (a replica died mid-capture) → error; expired rows → gone
-    await this.pool.query("update jobs set status='error', error='worker lost' where status='running' and updated_at < now() - interval '4 minutes'");
+    await this.pool.query("update jobs set status='error', error='worker lost' where status='running' and updated_at < now() - interval '8 minutes'");
     await this.pool.query('delete from jobs where expires_at < now()');
   }
 }

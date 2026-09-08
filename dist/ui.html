@@ -76,7 +76,7 @@
 
 <div id="status"></div>
 <progress id="bar" value="0" max="1" hidden></progress>
-<div id="stage" hidden><span id="stageText"></span><span id="stageTime"></span></div>
+<div id="stage" hidden><span id="stageText"></span><span><span id="stageTime"></span> <button id="cancel" class="secondary" style="padding:1px 8px;margin-left:8px">Cancel</button></span></div>
 <div id="fonts" hidden>
   <h1 style="margin-top:12px">Fonts on this page</h1>
   <div id="fontList"></div>
@@ -142,7 +142,7 @@
   function showCapture(m) {
     const n = m.widths ? m.widths.length : 1;
     const where = m.widthIndex !== undefined && n > 1 ? `${m.widthIndex + 1}/${n} · ` : '';
-    $('status').textContent = m.stage === 'queued' ? 'Capturing…' : `Capturing ${where}${m.message || ''}`;
+    $('status').textContent = m.stage === 'queued' ? (m.message && /queue/i.test(m.message) ? m.message : 'Capturing…') : `Capturing ${where}${m.message || ''}`;
     $('stage').hidden = false;
     $('stageText').innerHTML = `<b>${['queued', 'load', 'warmup', 'extract', 'images', 'raster', 'screenshot', 'done'].indexOf(m.stage) + 1 || '·'}/8</b> ${m.stage === 'queued' ? 'server' : m.stage}`;
     if (m.progress >= 0) { $('bar').classList.remove('busy'); $('bar').value = Math.max(0.02, m.progress); }
@@ -170,6 +170,7 @@
     post({ type: 'captureUrl', server: serverUrl(), apiKey: $('apikey').value.trim(), url, widths, region: $('region').value, ...fontOpts() });
   };
   $('close').onclick = () => post({ type: 'close' });
+  $('cancel').onclick = () => { post({ type: 'cancel' }); };
   $('checkKey').onclick = () => { saveSettings(); $('plan').hidden = false; $('plan').textContent = 'Checking…'; post({ type: 'me', server: serverUrl(), apiKey: $('apikey').value.trim() }); };
   function showPlan(m) {
     $('plan').hidden = false;
