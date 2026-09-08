@@ -1,6 +1,6 @@
 {
   "name": "html2figma",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "Capture any rendered web page (bookmarklet) and rebuild it as editable Figma layers (plugin).",
   "type": "module",
@@ -8,10 +8,11 @@
     "build": "node scripts/build.mjs",
     "watch": "node scripts/build.mjs --watch",
     "typecheck": "tsc --noEmit",
-    "test": "node test/run.mjs && node test/build.test.mjs && node test/server.test.mjs && node test/tenant.test.mjs",
+    "test": "node test/run.mjs && node test/build.test.mjs && node test/server.test.mjs && node test/tenant.test.mjs && node test/billing.test.mjs",
     "start": "node server/index.mjs",
     "dev:server": "H2F_ALLOW_ANON=1 H2F_ALLOW_PRIVATE=1 node server/index.mjs",
-    "admin": "node scripts/h2f-admin.mjs"
+    "admin": "node scripts/h2f-admin.mjs",
+    "stripe:setup": "node scripts/stripe-setup.mjs"
   },
   "devDependencies": {
     "@figma/plugin-typings": "^1.100.0",
@@ -21,6 +22,7 @@
   "dependencies": {
     "pg": "^8.23.0",
     "playwright": "^1.63.0",
+    "stripe": "^22.6.1",
     "wawoff2": "^2.0.1"
   },
   "engines": {

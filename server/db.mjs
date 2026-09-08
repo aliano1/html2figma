@@ -66,6 +66,10 @@ create table if not exists jobs (
   expires_at timestamptz not null default now() + interval '15 minutes'
 );
 create index if not exists jobs_queue on jobs(status, created_at);
+alter table accounts add column if not exists stripe_customer_id text;
+alter table accounts add column if not exists stripe_subscription_id text;
+create unique index if not exists accounts_stripe_customer on accounts(stripe_customer_id) where stripe_customer_id is not null;
+create unique index if not exists api_keys_checkout_once on api_keys(account_id, label) where label like 'checkout %';
 `;
 
 export const hashKey = k => createHash('sha256').update(k).digest('hex');

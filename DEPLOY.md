@@ -55,7 +55,25 @@ With one shared `H2F_API_KEY` everyone is the same user. To meter and sell captu
 
 `H2F_API_KEY` keeps working next to the database as an unmetered admin key (handy for your own use and for scripts). The plugin's "License key" field takes either.
 
-What the server enforces once strangers hold keys: only public http(s) hosts are captured (private ranges, localhost, cloud metadata addresses and non-standard ports are refused, and every request the page makes — including redirects and iframes — is checked again inside the browser), captures over `H2F_MAX_CAPTURE_MB` (default 60) are rejected, and the job queue lives in Postgres so several replicas can share it. Billing (Stripe / Lemon Squeezy → account + key on purchase) is the next layer; the admin CLI is what a webhook handler would call.
+### Selling it: Stripe checkout + webhook
+
+Once the database is attached, Stripe turns purchases into accounts and keys with no manual step:
+
+1. Stripe Dashboard → **Developers → API keys → Create restricted key**. Permissions: Checkout Sessions *write*, Billing Portal *write*, Customers *read*, Subscriptions *read*, Prices *read*, Products *write* (for the setup script). Copy the `rk_…` key. (Sandbox keys work the same way for testing.)
+2. Railway → html2figma → **Variables**: `STRIPE_SECRET_KEY` = that key. Optional: `H2F_PUBLIC_URL` = `https://your-domain` if you front the service with a custom domain.
+3. Create the products and prices once, from the service **Console**:
+
+   ```bash
+   node scripts/stripe-setup.mjs https://your-server        # Pro $15/mo · $144/yr, Team $49/mo · $470/yr — amounts in server/billing.mjs
+   ```
+
+4. Stripe Dashboard → **Developers → Webhooks → Add endpoint**: URL `https://your-server/stripe/webhook`, events `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`. Copy the signing secret → Railway variable `STRIPE_WEBHOOK_SECRET`. Redeploy; `/healthz` lists `billing`.
+
+The customer flow: `https://your-server/buy/pro` (or `/buy/team`, add `?interval=year`) → Stripe Checkout → back to `/welcome`, which creates the account, mints the license key and shows it **once** (only the hash is stored). The webhook keeps plans in sync afterwards: a price change moves the account between Pro and Team, an unpaid or cancelled subscription drops it to Free (the key keeps working with Free limits). `/portal?email=…` sends a customer to Stripe's billing portal to change card, upgrade or cancel. A lost key is re-issued with `node scripts/h2f-admin.mjs key their@email`.
+
+With a merchant-of-record setup (Stripe Managed Payments, when enabled on your account) tax is handled by Stripe; on a standard account add Stripe Tax to the Checkout Session (`automatic_tax: { enabled: true }` in `server/billing.mjs`) once you've registered where required.
+
+What the server enforces once strangers hold keys: only public http(s) hosts are captured (private ranges, localhost, cloud metadata addresses and non-standard ports are refused, and every request the page makes — including redirects and iframes — is checked again inside the browser), captures over `H2F_MAX_CAPTURE_MB` (default 60) are rejected, and the job queue lives in Postgres so several replicas can share it.
 
 ---
 
