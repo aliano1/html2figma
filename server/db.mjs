@@ -163,9 +163,9 @@ export class Db {
     const r = await this.pool.query('select * from jobs where id=$1 and ($2::uuid is null or account_id=$2)', [id, accountId]);
     return r.rows[0] || null;
   }
-  /** how many queued jobs are ahead of this one */
+  /** how many captures must finish before this one starts: everything running plus queued jobs older than it */
   async position(id) {
-    const r = await this.pool.query("select count(*)::int as n from jobs where status='queued' and created_at < (select created_at from jobs where id=$1)", [id]);
+    const r = await this.pool.query("select count(*)::int as n from jobs where status='running' or (status='queued' and created_at < (select created_at from jobs where id=$1))", [id]);
     return r.rows[0].n;
   }
   /** cancel: a queued job disappears; a running one is flagged and the worker stops at the next stage boundary */
