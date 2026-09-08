@@ -28,7 +28,8 @@ const fake = {
   } },
   billingPortal: { sessions: { create: async ({ customer }) => ({ url: 'https://billing.stripe.test/' + customer }) } },
 };
-const billing = new Billing({ db, stripe: fake, webhookSecret: WH, publicUrl: 'https://h2f.test' });
+const welcomed = [];
+const billing = new Billing({ db, stripe: fake, webhookSecret: WH, publicUrl: 'https://h2f.test', onWelcome: async a => { welcomed.push(a.email); } });
 const req = { headers: { host: 'h2f.test' } };
 
 check(planFromLookupKey('h2f_team_year') === 'team' && planFromLookupKey('h2f_x') === null, 'lookup keys map to plans');
@@ -82,12 +83,24 @@ await billing.handleWebhook(del, sign(del));
 const jane = (await db.pool.query("select plan, stripe_subscription_id from accounts where email='jane@studio.com'")).rows[0];
 check(jane.plan === 'free' && jane.stripe_subscription_id === null, 'cancelled subscription → free, key still valid for the free tier');
 check(!!(await db.authenticate(shown.key)), 'keys survive a downgrade (free tier)');
+check(welcomed.length === 2 && welcomed.includes('jane@studio.com') && welcomed.includes('bob@agency.com'), `welcome hook fired once per account (${welcomed.join(', ')})`);
 
-// 6. portal
+// 6. an unlimited account (the owner, a comped customer) is never re-planned by Stripe
+await db.createAccount('owner@h2f.test', 'unlimited');
+const url3 = await billing.checkoutUrl(req, 'pro', 'month', 'owner@h2f.test'); const sid3 = url3.split('/').pop();
+Object.assign(sessions.get(sid3), { status: 'complete', payment_status: 'paid', customer: 'cus_owner', subscription: 'sub_owner', customer_details: { email: 'owner@h2f.test' } });
+const own = await billing.fulfil(sessions.get(sid3));
+check(own.key && own.account.plan === 'unlimited' && (await db.accountByEmail('owner@h2f.test')).plan === 'unlimited', 'checkout by an unlimited account keeps it unlimited (key still issued)');
+const ownDel = JSON.stringify({ id: 'evt_6', object: 'event', type: 'customer.subscription.deleted', data: { object: { id: 'sub_owner', customer: 'cus_owner' } } });
+check(/→ unlimited/.test(await billing.handleWebhook(ownDel, sign(ownDel))) && (await db.accountByEmail('owner@h2f.test')).plan === 'unlimited', 'cancelling that subscription leaves it unlimited');
+const ownUpd = JSON.stringify({ id: 'evt_7', object: 'event', type: 'customer.subscription.updated', data: { object: { id: 'sub_owner', customer: 'cus_owner', status: 'unpaid', items: { data: [] } } } });
+check(/unchanged/.test(await billing.handleWebhook(ownUpd, sign(ownUpd))), 'subscription updates skip unlimited accounts');
+
+// 7. portal
 check((await billing.portalUrl(req, 'Jane@studio.com')) === 'https://billing.stripe.test/cus_jane', 'billing portal link for a customer');
 check(/no subscription/.test(await billing.portalUrl(req, 'nobody@x.com').catch(e => e.message)), 'portal refuses unknown email');
 
-// 7. the server exposes the routes when STRIPE_SECRET_KEY is set (no real Stripe calls: only /welcome without a session id)
+// 8. the server exposes the routes when STRIPE_SECRET_KEY is set (no real Stripe calls: only /welcome without a session id)
 const env = { ...process.env, PORT: '8125', DATABASE_URL: DB, H2F_API_KEY: 'admin-secret', STRIPE_SECRET_KEY: 'sk_test_dummy', STRIPE_WEBHOOK_SECRET: WH, H2F_ALLOW_PRIVATE: '1' };
 const proc = spawn('node', ['server/index.mjs'], { env, stdio: ['ignore', 'ignore', 'inherit'] });
 for (let i = 0; i < 40; i++) { try { const h = await fetch('http://127.0.0.1:8125/healthz'); if (h.ok) break; } catch {} await new Promise(r => setTimeout(r, 500)); }
@@ -97,6 +110,8 @@ const welcome = await fetch('http://127.0.0.1:8125/welcome');
 check(welcome.status === 200 && /html2figma/.test(await welcome.text()), '/welcome page served without auth');
 const hook = await fetch('http://127.0.0.1:8125/stripe/webhook', { method: 'POST', body: '{}', headers: { 'stripe-signature': 'nope' } });
 check(hook.status === 400, `webhook with a bad signature → 400`);
+const openPortal = await fetch('http://127.0.0.1:8125/portal?email=jane@studio.com', { redirect: 'manual' });
+check(openPortal.status === 401, `/portal without a signed token is refused (${openPortal.status}) — no portal access by email alone`);
 proc.kill('SIGTERM');
 await db.close();
 console.log(fails ? `\n${fails} check(s) failed` : '\nall billing checks passed');

@@ -3,7 +3,7 @@
  * Account / license-key admin for multi-tenant mode. Needs DATABASE_URL.
  *
  *   node scripts/h2f-admin.mjs account <email> [plan]          create (or re-plan) an account: free | pro | team | unlimited
- *   node scripts/h2f-admin.mjs key <email> [label]             mint a license key (printed once)
+ *   node scripts/h2f-admin.mjs key <email> [label]             mint a license key (printed once) — customers can also self-serve at /account
  *   node scripts/h2f-admin.mjs revoke <h2f_live_…>             revoke a key
  *   node scripts/h2f-admin.mjs plan <email> <plan> [credits]   change plan, optional custom monthly credits
  *   node scripts/h2f-admin.mjs usage <email>                   this month's credits + last 20 captures

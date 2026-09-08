@@ -30,6 +30,9 @@ import { chromium } from 'playwright';
 import { Db } from './db.mjs';
 import { assertPublicUrl, guardContext } from './safety.mjs';
 import { Billing, welcomePage, page as htmlPage } from './billing.mjs';
+import { Mailer, escapeHtml } from './mail.mjs';
+import { Accounts } from './account.mjs';
+import { createHash } from 'node:crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CORE = readFileSync(join(__dirname, '..', 'dist', 'core.iife.js'), 'utf8');
@@ -264,7 +267,13 @@ async function diffImages(b, a, bImg, cell) {
 //   multi-tenant  (DATABASE_URL set): license keys, monthly credits, per-plan concurrency, a Postgres
 //   queue that any replica can pull from, usage rows for billing.
 const db = process.env.DATABASE_URL ? new Db(process.env.DATABASE_URL) : null;
-const billing = db && process.env.STRIPE_SECRET_KEY ? new Billing({ db, secretKey: process.env.STRIPE_SECRET_KEY, webhookSecret: process.env.STRIPE_WEBHOOK_SECRET, publicUrl: process.env.H2F_PUBLIC_URL }) : null;
+// sign-in links are signed with H2F_SECRET; without it, a stable secret is derived from the other secrets
+const linkSecret = process.env.H2F_SECRET || createHash('sha256').update('h2f-links:' + (process.env.STRIPE_WEBHOOK_SECRET || '') + (process.env.H2F_API_KEY || '') + (process.env.DATABASE_URL || '')).digest('hex');
+const mailer = db ? new Mailer() : null;
+const accounts = db ? new Accounts({ db, mailer, secret: linkSecret, publicUrl: process.env.H2F_PUBLIC_URL }) : null;
+const billing = db && process.env.STRIPE_SECRET_KEY ? new Billing({ db, secretKey: process.env.STRIPE_SECRET_KEY, webhookSecret: process.env.STRIPE_WEBHOOK_SECRET, publicUrl: process.env.H2F_PUBLIC_URL, onWelcome: acct => accounts.sendWelcome(acct) }) : null;
+if (accounts) accounts.billing = billing;
+if (db && !mailer.configured) console.log('RESEND_API_KEY not set: sign-in and welcome emails are logged, not sent');
 const WORKER_ID = `${REGION}-${process.pid}-${Math.random().toString(36).slice(2, 6)}`;
 const memJobs = new Map();
 const JOB_TTL = 10 * 60 * 1000;
@@ -355,26 +364,28 @@ const jobView = (j, elapsedMs) => ({ id: j.id, status: j.status, stage: j.stage,
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization, x-api-key, content-type', 'access-control-allow-methods': 'POST, GET, DELETE, OPTIONS' }); return res.end(); }
-    if (req.url === '/healthz') return json(res, 200, { ok: true, region: REGION, browser: browserName || null, inflight, mode: db ? 'multi-tenant' : 'single-tenant', features: ['screenshot', 'fonts', 'diff', 'jobs', ...(db ? ['accounts'] : []), ...(billing ? ['billing'] : [])] });
+    if (req.url === '/healthz') return json(res, 200, { ok: true, region: REGION, browser: browserName || null, inflight, mode: db ? 'multi-tenant' : 'single-tenant', features: ['screenshot', 'fonts', 'diff', 'jobs', ...(db ? ['accounts'] : []), ...(billing ? ['billing'] : []), ...(mailer?.configured ? ['email'] : [])] });
 
-    // ---- billing pages (public; Stripe Checkout / Billing Portal do the authentication) ----
+    // ---- customer pages (public; a signed email link is the authentication) ----
+    if (accounts) {
+      const u = new URL(req.url, 'http://x');
+      if (/^\/(account|portal)(\/|$)/.test(u.pathname) && await accounts.handle(req, res, u, readBody)) return;
+    }
+    // ---- billing pages (public; Stripe Checkout does the authentication) ----
     if (billing) {
       const u = new URL(req.url, 'http://x');
-      const html = (status, body) => { res.writeHead(status, { 'content-type': 'text/html; charset=utf-8' }); res.end(body); };
+      accounts.base(req);   // remember the public host for emails sent from webhooks
+      const html = (status, body) => { res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }); res.end(body); };
       const buy = u.pathname.match(/^\/buy\/(pro|team)$/);
       if (req.method === 'GET' && buy) {
         try { res.writeHead(303, { location: await billing.checkoutUrl(req, buy[1], u.searchParams.get('interval') || 'month', u.searchParams.get('email')) }); return res.end(); }
-        catch (e) { return html(400, htmlPage('Checkout unavailable', `<h1>Checkout unavailable</h1><p>${String(e.message || e)}</p>`)); }
+        catch (e) { return html(400, htmlPage('Checkout unavailable', `<h1>Checkout unavailable</h1><p>${escapeHtml(e.message || e)}</p>`)); }
       }
       if (req.method === 'GET' && u.pathname === '/welcome') {
         const sid = u.searchParams.get('session_id');
-        if (!sid) return html(200, htmlPage('html2figma', '<h1>html2figma</h1><p>Thanks for visiting. Manage your subscription from the link in your receipt.</p>'));
+        if (!sid) return html(200, htmlPage('html2figma', '<h1>html2figma</h1><p>Thanks for visiting. Keys, usage and billing are on your <a href="/account">account page</a>.</p>'));
         try { const session = await billing.stripe.checkout.sessions.retrieve(sid, { expand: ['subscription'] }); return html(200, welcomePage(await billing.fulfil(session))); }
-        catch (e) { console.error('welcome failed', e); return html(400, htmlPage('Something went wrong', `<h1>Something went wrong</h1><p>${String(e.message || e)}</p>`)); }
-      }
-      if (req.method === 'GET' && u.pathname === '/portal') {
-        try { res.writeHead(303, { location: await billing.portalUrl(req, u.searchParams.get('email') || '') }); return res.end(); }
-        catch (e) { return html(404, htmlPage('No subscription', `<h1>No subscription found</h1><p>${String(e.message || e)}</p>`)); }
+        catch (e) { console.error('welcome failed', e); return html(400, htmlPage('Something went wrong', `<h1>Something went wrong</h1><p>${escapeHtml(e.message || e)}</p>`)); }
       }
       if (req.method === 'POST' && u.pathname === '/stripe/webhook') {
         let raw; try { raw = await readBody(req, 2e6); } catch { return json(res, 400, { error: 'body too large' }); }

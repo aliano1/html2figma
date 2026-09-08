@@ -30,11 +30,12 @@ export class Billing {
    * @param {import('./db.mjs').Db} o.db
    * @param {Stripe} [o.stripe]  injected in tests
    */
-  constructor({ db, secretKey, webhookSecret, stripe = null, publicUrl = null }) {
+  constructor({ db, secretKey, webhookSecret, stripe = null, publicUrl = null, onWelcome = null }) {
     this.db = db;
     this.stripe = stripe || new Stripe(secretKey);
     this.webhookSecret = webhookSecret;
     this.publicUrl = publicUrl;
+    this.onWelcome = onWelcome;   // async (account, req) → called once per account after its first paid checkout
   }
 
   base(req) {
@@ -70,11 +71,24 @@ export class Billing {
     return session.url;
   }
 
-  /** Account for a Stripe customer — created on first sight (idempotent on customer id, then email). */
+  /**
+   * Account for a Stripe customer — created on first sight (idempotent on customer id, then email).
+   * An `unlimited` account (yours, or a comped customer) is never re-planned by a purchase or by
+   * subscription events: Stripe only ever moves accounts between free / pro / team.
+   */
   async accountForCustomer(customerId, email, plan) {
     const byCustomer = await this.db.pool.query('select * from accounts where stripe_customer_id=$1', [customerId]);
-    if (byCustomer.rows[0]) { if (plan) await this.db.pool.query('update accounts set plan=$2 where id=$1', [byCustomer.rows[0].id, plan]); return { ...byCustomer.rows[0], plan: plan || byCustomer.rows[0].plan }; }
-    const acct = await this.db.createAccount(email, plan || 'free');
+    if (byCustomer.rows[0]) {
+      const a = byCustomer.rows[0];
+      if (plan && a.plan !== 'unlimited') { await this.db.pool.query('update accounts set plan=$2 where id=$1', [a.id, plan]); return { ...a, plan }; }
+      return a;
+    }
+    const byEmail = await this.db.pool.query('select * from accounts where email=$1', [email.toLowerCase()]);
+    let acct;
+    if (byEmail.rows[0]) {
+      acct = byEmail.rows[0];
+      if (plan && acct.plan !== 'unlimited') { await this.db.pool.query('update accounts set plan=$2 where id=$1', [acct.id, plan]); acct = { ...acct, plan }; }
+    } else acct = await this.db.createAccount(email, plan || 'free');
     await this.db.pool.query('update accounts set stripe_customer_id=$2 where id=$1', [acct.id, customerId]);
     return { ...acct, stripe_customer_id: customerId };
   }
@@ -97,6 +111,11 @@ export class Billing {
     if (!email || !customerId) throw new Error('checkout session has no customer');
     const account = await this.accountForCustomer(customerId, email, plan);
     if (session.subscription) await this.db.pool.query('update accounts set stripe_subscription_id=$2 where id=$1', [account.id, typeof session.subscription === 'string' ? session.subscription : session.subscription.id]);
+    // welcome email exactly once per account, whichever of webhook / success page gets here first
+    if (this.onWelcome) {
+      const first = await this.db.pool.query('update accounts set welcome_sent_at=now() where id=$1 and welcome_sent_at is null returning id', [account.id]);
+      if (first.rows[0]) await this.onWelcome(account).catch(e => { console.error('welcome email failed', e.message); return this.db.pool.query('update accounts set welcome_sent_at=null where id=$1', [account.id]); });
+    }
     // one key per checkout session: the session id is recorded on the key so a refresh never mints a second one
     const existing = await this.db.pool.query('select prefix from api_keys where account_id=$1 and label=$2', [account.id, 'checkout ' + session.id]);
     if (existing.rows[0]) return { account, key: null, keyPrefix: existing.rows[0].prefix };
@@ -124,13 +143,13 @@ export class Billing {
         const sub = event.data.object;
         const plan = this.planFromSubscription(sub);
         const active = ['active', 'trialing', 'past_due'].includes(sub.status);
-        const r = await this.db.pool.query('update accounts set plan=$2 where stripe_customer_id=$1 returning email', [sub.customer, active && plan ? plan : 'free']);
-        return `subscription ${sub.status}: ${r.rows[0]?.email || sub.customer} → ${active && plan ? plan : 'free'}`;
+        const r = await this.db.pool.query("update accounts set plan=$2 where stripe_customer_id=$1 and plan <> 'unlimited' returning email", [sub.customer, active && plan ? plan : 'free']);
+        return `subscription ${sub.status}: ${r.rows[0]?.email || sub.customer} → ${r.rows[0] ? (active && plan ? plan : 'free') : 'unchanged (unlimited)'}`;
       }
       case 'customer.subscription.deleted': {
         const sub = event.data.object;
-        const r = await this.db.pool.query("update accounts set plan='free', stripe_subscription_id=null where stripe_customer_id=$1 returning email", [sub.customer]);
-        return `subscription ended: ${r.rows[0]?.email || sub.customer} → free`;
+        const r = await this.db.pool.query("update accounts set plan = case when plan='unlimited' then plan else 'free' end, stripe_subscription_id=null where stripe_customer_id=$1 returning email, plan", [sub.customer]);
+        return `subscription ended: ${r.rows[0]?.email || sub.customer} → ${r.rows[0]?.plan || 'free'}`;
       }
       default:
         return `ignored ${event.type}`;
@@ -140,7 +159,7 @@ export class Billing {
   async portalUrl(req, email) {
     const r = await this.db.pool.query('select stripe_customer_id from accounts where email=$1', [email.toLowerCase()]);
     if (!r.rows[0]?.stripe_customer_id) throw new Error('no subscription for that email');
-    const s = await this.stripe.billingPortal.sessions.create({ customer: r.rows[0].stripe_customer_id, return_url: this.base(req) + '/welcome?portal=1' });
+    const s = await this.stripe.billingPortal.sessions.create({ customer: r.rows[0].stripe_customer_id, return_url: this.base(req) + '/account?email=' + encodeURIComponent(email.toLowerCase()) });
     return s.url;
   }
 }
@@ -154,11 +173,12 @@ ${body}`;
 }
 export function welcomePage(r) {
   if (!r) return page('Payment pending', `<h1>Almost there</h1><p>Your payment is still being confirmed. Refresh this page in a few seconds.</p>`);
+  const manage = `<p class="muted">Keys, usage, invoices and cancellation live on your <a href="/account?email=${encodeURIComponent(r.account.email)}">account page</a> — we email you a sign-in link, no password.</p>`;
   if (r.key) return page('Your license key', `<h1>Thanks — you're on ${esc(r.account.plan)}</h1>
 <p>This is your license key. It is shown <b>once</b>; copy it now and paste it into the html2figma plugin (From URL → License key).</p>
 <code>${esc(r.key)}</code>
-<p class="muted">Manage or cancel your subscription any time from the <a href="/portal?email=${encodeURIComponent(r.account.email)}">billing portal</a>. Lost the key? Reply to your receipt email and we'll issue a new one.</p>`);
+${manage}`);
   if (!r.keyPrefix) return page('Payment received', `<h1>Payment received</h1><p>Your account is on ${esc(r.account.plan)}. Refresh this page to get your license key.</p>`);
-  return page('License key already issued', `<h1>Key already issued</h1><p>The key for this purchase (starting <code style="display:inline;padding:2px 6px">${esc(r.keyPrefix)}…</code>) was shown when you completed checkout. If you didn't save it, reply to your receipt email and we'll issue a replacement.</p>
-<p><a href="/portal?email=${encodeURIComponent(r.account.email)}">Billing portal</a></p>`);
+  return page('License key already issued', `<h1>Key already issued</h1><p>The key for this purchase (starting <code style="display:inline;padding:2px 6px">${esc(r.keyPrefix)}…</code>) was shown when you completed checkout. If you didn't save it, create a new one from your account page.</p>
+${manage}`);
 }

@@ -70,6 +70,7 @@ alter table accounts add column if not exists stripe_customer_id text;
 alter table accounts add column if not exists stripe_subscription_id text;
 create unique index if not exists accounts_stripe_customer on accounts(stripe_customer_id) where stripe_customer_id is not null;
 create unique index if not exists api_keys_checkout_once on api_keys(account_id, label) where label like 'checkout %';
+alter table accounts add column if not exists welcome_sent_at timestamptz;
 `;
 
 export const hashKey = k => createHash('sha256').update(k).digest('hex');
@@ -101,6 +102,20 @@ export class Db {
   }
   async revokeKey(key) {
     const r = await this.pool.query('update api_keys set revoked_at=now() where key_hash=$1 and revoked_at is null', [hashKey(key)]);
+    return r.rowCount > 0;
+  }
+  async accountByEmail(email) {
+    const r = await this.pool.query('select * from accounts where email=$1', [String(email || '').trim().toLowerCase()]);
+    return r.rows[0] || null;
+  }
+  /** the account's keys, never the hashes: prefix, label, created, last used, revoked */
+  async listKeys(accountId) {
+    const r = await this.pool.query('select prefix, label, created_at, last_used_at, revoked_at from api_keys where account_id=$1 order by created_at desc', [accountId]);
+    return r.rows;
+  }
+  /** revoke by prefix — what the customer can see on the account page (prefixes are unique enough per account) */
+  async revokeKeyByPrefix(accountId, prefix) {
+    const r = await this.pool.query('update api_keys set revoked_at=now() where account_id=$1 and prefix=$2 and revoked_at is null', [accountId, prefix]);
     return r.rowCount > 0;
   }
   /** key → { account, keyHash } or null */

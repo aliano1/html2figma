@@ -69,7 +69,19 @@ Once the database is attached, Stripe turns purchases into accounts and keys wit
 
 4. Stripe Dashboard → **Developers → Webhooks → Add endpoint**: URL `https://your-server/stripe/webhook`, events `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`. Copy the signing secret → Railway variable `STRIPE_WEBHOOK_SECRET`. Redeploy; `/healthz` lists `billing`.
 
-The customer flow: `https://your-server/buy/pro` (or `/buy/team`, add `?interval=year`) → Stripe Checkout → back to `/welcome`, which creates the account, mints the license key and shows it **once** (only the hash is stored). The webhook keeps plans in sync afterwards: a price change moves the account between Pro and Team, an unpaid or cancelled subscription drops it to Free (the key keeps working with Free limits). `/portal?email=…` sends a customer to Stripe's billing portal to change card, upgrade or cancel. A lost key is re-issued with `node scripts/h2f-admin.mjs key their@email`.
+The customer flow: `https://your-server/buy/pro` (or `/buy/team`, add `?interval=year`) → Stripe Checkout → back to `/welcome`, which creates the account, mints the license key and shows it **once** (only the hash is stored). The webhook keeps plans in sync afterwards: a price change moves the account between Pro and Team, an unpaid or cancelled subscription drops it to Free (the key keeps working with Free limits). Accounts on the `unlimited` plan (yours, comped customers) are never re-planned by Stripe events.
+
+### Customer self-service: `/account` + email
+
+Customers manage themselves at `https://your-server/account`: they enter their email, get a one-time sign-in link (valid 30 minutes, max 3 per 10 minutes, unknown addresses get the same "check your email" answer), and land on a page with their plan, this month's usage, their keys (prefix, label, created, last used), **Create new key** (shown once; up to 10 active), **Revoke**, an upgrade link and the **Billing portal** button (Stripe: card, invoices, cancel). After the first paid checkout the same address gets a welcome email with that link, so a lost key never needs you. `/portal` only works from a signed link — never from an email address alone.
+
+Email goes out through [Resend](https://resend.com) (free tier is plenty to start):
+
+1. Resend → **Domains → Add domain**, add the DNS records it shows for a domain you own (a subdomain like `mail.yourdomain.com` is fine), wait for "Verified".
+2. Resend → **API keys → Create** (Sending access only). Railway variable `RESEND_API_KEY` = `re_…`.
+3. Railway variable `H2F_MAIL_FROM` = `html2figma <hello@mail.yourdomain.com>` (must be on the verified domain). Optional `H2F_SECRET` = any long random string used to sign the links (otherwise one is derived from your other secrets — set it explicitly before running more than one service that must agree).
+
+Until `RESEND_API_KEY` is set nothing is sent: links are printed in the server log instead, which is enough for development. `/healthz` lists `email` once mail is configured.
 
 With a merchant-of-record setup (Stripe Managed Payments, when enabled on your account) tax is handled by Stripe; on a standard account add Stripe Tax to the Checkout Session (`automatic_tax: { enabled: true }` in `server/billing.mjs`) once you've registered where required.
 
