@@ -43,15 +43,15 @@ With one shared `H2F_API_KEY` everyone is the same user. To meter and sell captu
 4. Create accounts and keys from the service **Console** tab (or locally with `railway run`):
 
    ```bash
-   node scripts/h2f-admin.mjs account jane@studio.com pro      # plans: free (10 credits/mo), pro (300), team (1500), unlimited
+   node scripts/h2f-admin.mjs account jane@studio.com pro      # plans: free (5 imports/mo), pro, team (unlimited, fair-use/day), unlimited (no caps)
    node scripts/h2f-admin.mjs key jane@studio.com "figma"      # prints h2f_live_… once — send it to the customer
-   node scripts/h2f-admin.mjs usage jane@studio.com            # credits used this month + last captures
+   node scripts/h2f-admin.mjs usage jane@studio.com            # imports this month + last captures
    node scripts/h2f-admin.mjs accounts                         # everyone, with this month's usage
-   node scripts/h2f-admin.mjs plan jane@studio.com team        # upgrade; optional custom monthly credits as 4th arg
+   node scripts/h2f-admin.mjs plan jane@studio.com team        # upgrade; optional custom monthly import cap as 4th arg
    node scripts/h2f-admin.mjs revoke h2f_live_…                # kill a key
    ```
 
-   A credit is one captured width. Credits reset on the 1st (UTC). Plans also set widths per capture (free 2, others 4) and concurrent captures (free 1, pro 2, team 4). Ten capture requests per minute per key.
+   An import is one captured page, whatever the widths. Free gets 5 a month (resets on the 1st, UTC); Pro and Team are unlimited with a fair-use cap per day (200 / 1,000). Plans also set widths per import (free 2, others 4), parallel imports (free 1, pro 2, team 4) and active keys (1 / 3 / 10). Ten capture requests per minute per key. All numbers live in `PLANS` in `server/db.mjs`; prices in `PLAN_PRICES` in `server/billing.mjs`.
 
 `H2F_API_KEY` keeps working next to the database as an unmetered admin key (handy for your own use and for scripts). The plugin's "License key" field takes either.
 
@@ -64,7 +64,7 @@ Once the database is attached, Stripe turns purchases into accounts and keys wit
 3. Create the products and prices once, from the service **Console**:
 
    ```bash
-   node scripts/stripe-setup.mjs https://your-server        # Pro $15/mo · $144/yr, Team $49/mo · $470/yr — amounts in server/billing.mjs
+   node scripts/stripe-setup.mjs https://your-server        # Pro $12/mo · $96/yr, Team $39/mo · $390/yr — amounts in server/billing.mjs; re-run after changing them (old prices are archived, existing subscribers keep theirs)
    ```
 
 4. Stripe Dashboard → **Developers → Webhooks → Add endpoint**: URL `https://your-server/stripe/webhook`, events `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`. Copy the signing secret → Railway variable `STRIPE_WEBHOOK_SECRET`. Redeploy; `/healthz` lists `billing`.
@@ -73,7 +73,7 @@ The customer flow: `https://your-server/buy/pro` (or `/buy/team`, add `?interval
 
 ### Customer self-service: `/account` + email
 
-Customers manage themselves at `https://your-server/account`: they enter their email, get a one-time sign-in link (valid 30 minutes, max 3 per 10 minutes, unknown addresses get the same "check your email" answer), and land on a page with their plan, this month's usage, their keys (prefix, label, created, last used), **Create new key** (shown once; up to 10 active), **Revoke**, an upgrade link and the **Billing portal** button (Stripe: card, invoices, cancel). After the first paid checkout the same address gets a welcome email with that link, so a lost key never needs you. `/portal` only works from a signed link — never from an email address alone.
+Customers manage themselves at `https://your-server/account`: they enter their email, get a one-time sign-in link (valid 30 minutes, max 3 per 10 minutes, unknown addresses get the same "check your email" answer), and land on a page with their plan, this month's usage, their keys (prefix, label, created, last used), **Create new key** (shown once; 1 / 3 / 10 active keys by plan), **Revoke**, an upgrade link and the **Billing portal** button (Stripe: card, invoices, cancel). After the first paid checkout the same address gets a welcome email with that link, so a lost key never needs you. `/portal` only works from a signed link — never from an email address alone.
 
 Email goes out through [Resend](https://resend.com) (free tier is plenty to start):
 
@@ -155,11 +155,11 @@ Response: `{ url, title, region, ms, captures: [{ viewport: [w, h], capture }] }
 
 `POST /diff` `{ reference: dataURL, candidate: dataURL, cell?: 24 }` → `{ similarity, width, height, diff, regions }` — pixel comparison of the page screenshot with an exported Figma frame; `diff` is a PNG heat-map, `regions` the worst grid cells. Body limit 80 MB.
 
-`GET /me` → `{ email, plan, credits, used, remaining, resetsAt }` for a license key (`plan: "admin"` and null credits for the shared key).
+`GET /me` → `{ email, plan, imports, unlimited, used, remaining, perDay, usedToday, resetsAt }` for a license key (`plan: "admin"` and null imports for the shared key).
 
 `GET /healthz` → `{ ok, region, browser, inflight, mode, features }`
 
-Errors you'll see in multi-tenant mode: `401` invalid/revoked key, `402` out of credits (body includes `quota`), `429` a capture is already running / too many per minute, `400` URL refused by the safety checks.
+Errors you'll see in multi-tenant mode: `401` invalid/revoked key, `402` monthly imports used up, `429` fair-use daily cap (both include `quota`), `429` a capture is already running / too many per minute, `400` URL refused by the safety checks.
 
 Concurrency: `H2F_MAX_INFLIGHT` (default 2) captures per instance; over that returns 429. Each capture uses ~300–600 MB peak, so the 2 GB machine size in `fly.toml` is deliberate.
 

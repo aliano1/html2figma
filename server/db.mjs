@@ -3,17 +3,21 @@
  * Enabled when DATABASE_URL is set (Railway Postgres → the variable is injected automatically once
  * you reference it). Without it the server runs single-tenant on H2F_API_KEY exactly as before.
  *
- * Keys look like `h2f_live_<32 hex>`; only the SHA-256 is stored. Credits: one per captured width.
+ * Keys look like `h2f_live_<32 hex>`; only the SHA-256 is stored. Metering is in imports: one import is
+ * one captured page, whatever the number of widths. Paid plans are unlimited with a fair-use cap per day.
  */
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import pg from 'pg';
 
+export const UNLIMITED = 1e9;
 export const PLANS = {
-  free: { credits: 10, concurrency: 1, widthsPerCapture: 2 },
-  pro: { credits: 300, concurrency: 2, widthsPerCapture: 4 },
-  team: { credits: 1500, concurrency: 4, widthsPerCapture: 4 },
-  unlimited: { credits: 1e9, concurrency: 8, widthsPerCapture: 4 },
+  //             imports/month     fair use/day     active keys  parallel  widths per import
+  free:      { imports: 5,         perDay: 5,         keys: 1,   concurrency: 1, widthsPerCapture: 2 },
+  pro:       { imports: UNLIMITED, perDay: 200,       keys: 3,   concurrency: 2, widthsPerCapture: 4 },
+  team:      { imports: UNLIMITED, perDay: 1000,      keys: 10,  concurrency: 4, widthsPerCapture: 4 },
+  unlimited: { imports: UNLIMITED, perDay: UNLIMITED, keys: 20,  concurrency: 8, widthsPerCapture: 4 },
 };
+export const isUnlimited = n => n >= UNLIMITED;
 
 const SCHEMA = `
 create table if not exists accounts (
@@ -128,21 +132,27 @@ export class Db {
     return { account: r.rows[0], keyHash: h };
   }
 
-  // ---- metering ----
+  // ---- metering (imports: one per captured page) ----
   monthStart() { const d = new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)); }
-  async creditsUsed(accountId) {
-    const r = await this.pool.query("select coalesce(sum(credits),0)::int as used from usage where account_id=$1 and status <> 'error' and created_at >= $2", [accountId, this.monthStart()]);
-    return r.rows[0].used;
+  dayStart() { const d = new Date(); return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())); }
+  async importsSince(accountId, since) {
+    const r = await this.pool.query("select count(*)::int as n from usage where account_id=$1 and status <> 'error' and created_at >= $2", [accountId, since]);
+    return r.rows[0].n;
   }
+  /** plan limits; `credits_override` (legacy column name) is a custom monthly import cap */
   limits(account) {
     const p = PLANS[account.plan] || PLANS.free;
-    return { ...p, credits: account.credits_override ?? p.credits };
+    return { ...p, imports: account.credits_override ?? p.imports };
   }
   async quota(account) {
     const lim = this.limits(account);
-    const used = await this.creditsUsed(account.id);
+    const [used, usedToday] = await Promise.all([this.importsSince(account.id, this.monthStart()), this.importsSince(account.id, this.dayStart())]);
     const next = new Date(this.monthStart()); next.setUTCMonth(next.getUTCMonth() + 1);
-    return { plan: account.plan, credits: lim.credits, used, remaining: Math.max(0, lim.credits - used), resetsAt: next.toISOString(), concurrency: lim.concurrency, widthsPerCapture: lim.widthsPerCapture };
+    return {
+      plan: account.plan, imports: lim.imports, unlimited: isUnlimited(lim.imports), used, remaining: Math.max(0, lim.imports - used),
+      perDay: lim.perDay, usedToday, resetsAt: next.toISOString(), concurrency: lim.concurrency, widthsPerCapture: lim.widthsPerCapture, keys: lim.keys,
+      credits: lim.imports,   // legacy alias for older plugin builds
+    };
   }
   async recordUsage({ accountId, keyHash, url, widths, credits, ms, status, error, region }) {
     await this.pool.query('insert into usage(account_id, key_hash, url, widths, credits, ms, status, error, region) values($1,$2,$3,$4,$5,$6,$7,$8,$9)',

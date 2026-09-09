@@ -175,9 +175,11 @@
   function showPlan(m) {
     $('plan').hidden = false;
     if (m.error) { $('plan').innerHTML = `<span style="color:var(--figma-color-text-danger)">${m.error}</span>`; return; }
-    if (m.credits === null || m.credits === undefined) { $('plan').textContent = `Connected (${m.plan} key, no metering)`; return; }
-    const pct = Math.min(100, Math.round(100 * m.used / Math.max(1, m.credits)));
-    $('plan').innerHTML = `<b style="color:var(--figma-color-text);font-weight:500">${m.plan[0].toUpperCase() + m.plan.slice(1)}</b> · ${m.remaining} of ${m.credits} credits left this month (1 per width) · resets ${new Date(m.resetsAt).toLocaleDateString()}${pct >= 90 ? ' · <span style="color:var(--figma-color-text-danger)">almost out</span>' : ''}`;
+    if (m.imports === null || m.imports === undefined) { $('plan').textContent = `Connected (${m.plan} key, no metering)`; return; }
+    const name = m.plan[0].toUpperCase() + m.plan.slice(1);
+    const pct = Math.min(100, Math.round(100 * m.used / Math.max(1, m.imports)));
+    if (m.unlimited) { $('plan').innerHTML = `<b style="color:var(--figma-color-text);font-weight:500">${name}</b> · unlimited imports · ${m.used} this month`; return; }
+    $('plan').innerHTML = `<b style="color:var(--figma-color-text);font-weight:500">${name}</b> · ${m.remaining} of ${m.imports} imports left this month · resets ${new Date(m.resetsAt).toLocaleDateString()}${pct >= 90 ? ' · <span style="color:var(--figma-color-text-danger)">almost out</span>' : ''}`;
   }
 
   window.onmessage = e => {

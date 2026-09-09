@@ -31,13 +31,13 @@ check(health.mode === 'multi-tenant' && health.features.includes('accounts'), `s
 admin('account', 'ali@example.com', 'free');
 const key = admin('key', 'ali@example.com', 'figma plugin').match(/h2f_live_[0-9a-f]{32}/)[0];
 check(!!key, `license key minted (${key.slice(0, 16)}…)`);
-admin('plan', 'ali@example.com', 'free', '3');   // custom cap: 3 credits this month
+admin('plan', 'ali@example.com', 'free', '3');   // custom cap: 3 imports this month
 
 // auth
 check((await api('/me')).status === 401, 'no key → 401');
 check((await api('/me', 'h2f_live_' + '0'.repeat(32))).status === 401, 'unknown key → 401');
 const me = await (await api('/me', key)).json();
-check(me.email === 'ali@example.com' && me.plan === 'free' && me.credits === 3 && me.remaining === 3, `/me reports plan and credits (${JSON.stringify(me)})`);
+check(me.email === 'ali@example.com' && me.plan === 'free' && me.imports === 3 && me.remaining === 3 && me.unlimited === false, `/me reports plan and imports (${JSON.stringify(me)})`);
 
 // SSRF guard is bypassed by H2F_ALLOW_PRIVATE for the local test page, but scheme/credential checks still apply
 check((await api('/capture', key, { url: 'ftp://example.com/' })).status === 400, 'non-http URL refused');
@@ -46,7 +46,7 @@ check((await api('/capture', key, { url: 'ftp://example.com/' })).status === 400
 const t0 = Date.now();
 const start = await api('/capture', key, { url: 'http://localhost:8099/', widths: [1280, 390], async: true });
 const job = await start.json();
-check(start.status === 202 && job.jobId && job.quota.remaining === 1, `async capture accepted, quota shows 1 credit left after this job (${JSON.stringify(job.quota)})`);
+check(start.status === 202 && job.jobId && job.quota.remaining === 2, `async capture accepted, quota shows 2 imports left after this job (${JSON.stringify(job.quota)})`);
 let last = null, stages = new Set(), polls = 0;
 while (polls++ < 300) { await new Promise(r => setTimeout(r, 300)); last = await (await api('/jobs/' + job.jobId, key)).json(); if (last.stage) stages.add(last.stage); if (last.status === 'done' || last.status === 'error') break; }
 check(last.status === 'done' && last.result && last.result.captures.length === 2, `queued job ran on the worker and delivered 2 captures in ${Math.round((Date.now() - t0) / 1000)} s (${last.error || last.status})`);
@@ -67,18 +67,22 @@ admin('plan', 'ali@example.com', 'unlimited');
   let last; for (let i = 0; i < 200; i++) { await new Promise(r => setTimeout(r, 300)); last = await (await api('/jobs/' + a.jobId, key)).json(); if (last.status === 'done' || last.status === 'error') break; }
   check(last.status === 'done', 'the first job still completes');
 }
-admin('plan', 'ali@example.com', 'free', '3');
-// metering
+admin('plan', 'ali@example.com', 'free', '2');
+// metering: one import per captured page, whatever the widths (2 pages so far: the 2-width job and job a)
 const me2 = await (await api('/me', key)).json();
-check(me2.used === 3 && me2.remaining === 0, `usage metered: 3 credits used, 0 left (${me2.used}/${me2.credits})`);
+check(me2.used === 2 && me2.remaining === 0, `usage metered in imports: 2 used, 0 left (${me2.used}/${me2.imports})`);
 const over = await api('/capture', key, { url: 'http://localhost:8099/', widths: [1280, 390] });
 check(over.status === 402, `over quota → 402 (${over.status}: ${(await over.json()).error})`);
-admin('plan', 'ali@example.com', 'free', '4');
+admin('plan', 'ali@example.com', 'free', '3');
 const okOne = await api('/capture', key, { url: 'http://localhost:8099/', widths: [390] });
-check(okOne.status === 200 && (await okOne.json()).captures.length === 1, 'sync capture within the remaining credit succeeds');
-check((await api('/capture', key, { url: 'http://localhost:8099/', widths: [390] })).status === 402, 'then the account is out of credits');
+check(okOne.status === 200 && (await okOne.json()).captures.length === 1, 'sync capture within the remaining import succeeds');
+check((await api('/capture', key, { url: 'http://localhost:8099/', widths: [390] })).status === 402, 'then the account is out of imports');
 const usage = admin('usage', 'ali@example.com');
-check(/4\/4 credits used/.test(usage), `admin usage view: ${usage.split('\n')[0]}`);
+check(/3\/3 imports this month/.test(usage), `admin usage view: ${usage.split('\n')[0]}`);
+// fair-use day cap: unlimited monthly, 3 a day → the 4th today is refused with 429
+admin('plan', 'ali@example.com', 'pro');
+const pro = await (await api('/me', key)).json();
+check(pro.unlimited === true && pro.perDay === 200 && pro.usedToday === 3, `pro reports unlimited with a daily fair-use cap (${JSON.stringify(pro)})`);
 
 // plan limits: free allows 2 widths per capture
 admin('plan', 'ali@example.com', 'free');

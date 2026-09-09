@@ -42,11 +42,11 @@ Missing a font? The Fonts panel lists what the page used and downloads the page'
 Pages behind a login, or sites that block automated browsers? The bookmarklet captures the page from your own browser tab and hands it to the plugin — nothing about the page leaves your machine except what you paste.
 
 How it works
-1. Get a license key at htmlimport.com — Free includes 10 captures a month, no card needed.
+1. Get a license key at htmlimport.com — Free includes 5 imports a month, no card needed.
 2. Run htmlimport, paste the key once.
 3. Paste a URL, pick widths, click Capture. Progress is shown live; a typical page takes under a minute.
 
-Plans: Free (10 captures/month, 2 widths), Pro ($15/month, 300 captures, 4 widths), Team ($49/month, 1,500 captures). A capture of one width is one credit. Manage keys and billing at htmlimport.com/account.
+Plans: Free (5 imports a month, 2 widths), Pro ($12/month or $96/year, unlimited imports, 4 widths, one person), Team ($39/month or $390/year, unlimited imports for up to 10 people). An import is one page at any number of widths. Manage keys and billing at htmlimport.com/account.
 
 Support: hello@htmlimport.com · Terms and privacy: htmlimport.com/terms
 ```

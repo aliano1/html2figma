@@ -75,7 +75,7 @@ export class Accounts {
     if (!(await this.db.accountByEmail(email))) {
       await this.db.createAccount(email, 'free');
       if (!this.throttled(email)) await this.mailer.send({ to: email, subject: `Your free ${this.productName} account`,
-        text: `Welcome to ${this.productName}. Your free plan includes ${this.freeCredits} captures a month.\n\nOpen your account page to create a license key, then paste it into the Figma plugin under From URL → License key:\n\n${this.link(email, req)}\n\nThe link works for 30 minutes; request a new one any time at ${this.base(req)}/account.` });
+        text: `Welcome to ${this.productName}. Your free plan includes ${this.freeCredits} imports a month.\n\nOpen your account page to create a license key, then paste it into the Figma plugin under From URL → License key:\n\n${this.link(email, req)}\n\nThe link works for 30 minutes; request a new one any time at ${this.base(req)}/account.` });
       return { ok: true };
     }
     return this.requestLink(req, email);
@@ -87,7 +87,7 @@ export class Accounts {
     if (list.length >= 10) return true;
     list.push(now); return false;
   }
-  get freeCredits() { return this.db.limits({ plan: 'free' }).credits; }
+  get freeCredits() { return this.db.limits({ plan: 'free' }).imports; }
 
   /** After the first paid checkout: receipt-style welcome with the account link. */
   async sendWelcome(account, req = null) {
@@ -115,14 +115,14 @@ ${error ? `<p style="color:#b91c1c">${esc(error)}</p>` : ''}
     return page('Your account', `<style>.wrap{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px}td,th{text-align:left;padding:8px 6px;border-bottom:1px solid #eee;white-space:nowrap}th{color:#666;font-weight:500}tr.muted{color:#888}.bar{height:8px;background:#eee;border-radius:4px;overflow:hidden}.bar i{display:block;height:100%;background:#111}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}</style>
 <h1>${esc(account.email)}</h1>
 <p class="row"><span>Plan: <b>${esc(quota.plan)}</b></span>${this.billing && account.stripe_customer_id ? `<a class="btn" href="/portal?token=${t}">Billing portal</a>` : ''}${this.billing && quota.plan !== 'team' && quota.plan !== 'unlimited' ? `<a href="/buy/${quota.plan === 'pro' ? 'team' : 'pro'}?email=${encodeURIComponent(account.email)}">Upgrade to ${quota.plan === 'pro' ? 'Team' : 'Pro'}</a>` : ''}</p>
-<p>${quota.used} of ${quota.credits >= 1e9 ? '∞' : quota.credits} credits used this month${quota.credits < 1e9 ? ` · resets ${quota.resetsAt.slice(0, 10)}` : ''}</p>
-${quota.credits < 1e9 ? `<div class="bar"><i style="width:${Math.min(100, Math.round(100 * quota.used / quota.credits))}%"></i></div>` : ''}
+<p>${quota.unlimited ? `${quota.used} import${quota.used === 1 ? '' : 's'} this month · unlimited (fair use ${quota.perDay >= 1e9 ? '∞' : quota.perDay + ' a day'})` : `${quota.used} of ${quota.imports} imports used this month · resets ${quota.resetsAt.slice(0, 10)}`}</p>
+${quota.unlimited ? '' : `<div class="bar"><i style="width:${Math.min(100, Math.round(100 * quota.used / quota.imports))}%"></i></div>`}
 ${notice ? `<p style="color:#166534">${esc(notice)}</p>` : ''}
 ${newKey ? `<h2 style="font-size:18px">Your new license key</h2><p>Shown <b>once</b> — copy it now and paste it into the plugin (From URL → License key).</p><code>${esc(newKey)}</code>` : ''}
 <h2 style="font-size:18px">License keys</h2>
 <div class="wrap"><table><tr><th>Key</th><th>Label</th><th>Created</th><th>Last used</th><th></th></tr>${rows || '<tr><td colspan="5" class="muted">No keys yet</td></tr>'}</table></div>
 <form method="post" action="/account/key" class="row" style="margin-top:14px"><input type="hidden" name="token" value="${esc(token)}"><input name="label" placeholder="Label (optional, e.g. laptop)" style="font:14px system-ui;padding:8px 10px;border:1px solid #ccc;border-radius:8px"><button class="btn" style="font:14px system-ui;border:0;cursor:pointer">Create new key</button></form>
-<p class="muted">Lost a key? Create a new one and revoke the old. Keys count against the same monthly credits. This page's link expires 30 minutes after it was issued — <a href="/account?email=${encodeURIComponent(account.email)}">request another</a>.</p>`);
+<p class="muted">Lost a key? Create a new one and revoke the old. Every key on the account shares its plan. This page's link expires 30 minutes after it was issued — <a href="/account?email=${encodeURIComponent(account.email)}">request another</a>.</p>`);
   }
 
   // ---- routing ----
@@ -159,7 +159,8 @@ ${newKey ? `<h2 style="font-size:18px">Your new license key</h2><p>Shown <b>once
     if (u.pathname === '/account/key' && req.method === 'POST') {
       const f = await form(); const s = await authed(f.get('token')); if (!s) return expired();
       const active = (await this.db.listKeys(s.account.id)).filter(k => !k.revoked_at).length;
-      if (active >= 10) return render(s, { notice: 'You already have 10 active keys — revoke one first.' });
+      const max = this.db.limits(s.account).keys;
+      if (active >= max) return render(s, { notice: `The ${s.account.plan} plan allows ${max} active key${max === 1 ? '' : 's'} — revoke one first${s.account.plan === 'pro' ? ', or move to Team for 10' : ''}.` });
       const { key } = await this.db.createKey(s.account.email, (f.get('label') || 'account page').slice(0, 40));
       return render(s, { newKey: key });
     }

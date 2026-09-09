@@ -73,23 +73,23 @@ footer{padding:36px 0 48px;color:var(--muted);font-size:14px;display:flex;justif
 <section><h2>What comes through</h2><p class="kicker">Built to be compared against the page pixel by pixel — and to lose as little as possible.</p>
 <div class="grid">
   <div><h3>Real text, real fonts</h3><p>Text layers with the page's font family, weight, size, letter-spacing and transforms. Missing a font? The Fonts panel downloads the page's own font files so you can install them.</p></div>
-  <div><h3>Every breakpoint</h3><p>Up to four widths per capture, each in its own frame. Phone widths render with mobile emulation, so you get the mobile layout, not a squeezed desktop.</p></div>
+  <div><h3>Every breakpoint</h3><p>Up to four widths per import, each in its own frame. Phone widths render with mobile emulation, so you get the mobile layout, not a squeezed desktop.</p></div>
   <div><h3>Images, SVG, video</h3><p>Raster images at their displayed crop, inline SVG as vectors, video posters and frames, CSS gradients, shadows, blur and backdrop blur as effects.</p></div>
   <div><h3>Pseudo-elements and icons</h3><p>::before / ::after decorations, icon fonts and CSS-drawn shapes are captured as layers rather than dropped.</p></div>
   <div><h3>Fidelity check</h3><p>Ask for a reference screenshot and the plugin overlays it and computes a pixel diff, highlighting the areas that differ.</p></div>
   <div><h3>Private pages</h3><p>The bookmarklet runs in your logged-in browser tab and hands the capture to the plugin — nothing about the page leaves your machine except what you paste.</p></div>
 </div></section>
 
-<section id="pricing"><h2>Pricing</h2><p class="kicker">A credit is one captured width. Credits reset on the 1st of each month. Cancel any time from your account page.</p>
+<section id="pricing"><h2>Pricing</h2><p class="kicker">An import is one page, at as many widths as your plan allows. Cancel any time from your account page.</p>
 <div class="plans">
-${plan('Free', '$0', 'no card needed', [`${P.free.credits} credits a month`, `${P.free.widthsPerCapture} widths per capture`, '1 capture at a time', 'Bookmarklet + URL capture'], free)}
-${plan('Pro', money($.pro.month) + '<span style="font-size:15px;font-weight:400;color:#666">/month</span>', 'for individual designers', [`${P.pro.credits} credits a month`, `${P.pro.widthsPerCapture} widths per capture`, `${P.pro.concurrency} captures in parallel`, 'Fonts panel + pixel diff', 'Email support'], buy('pro', 'Get Pro')).replace('class="plan"', 'class="plan hot"')}
-${plan('Team', money($.team.month) + '<span style="font-size:15px;font-weight:400;color:#666">/month</span>', 'for studios and agencies', [`${P.team.credits.toLocaleString('en-US')} credits a month`, `${P.team.widthsPerCapture} widths per capture`, `${P.team.concurrency} captures in parallel`, 'Multiple keys, one bill', 'Priority support'], buy('team', 'Get Team'))}
+${plan('Free', '$0', 'no card needed', [`${P.free.imports} imports a month`, `${P.free.widthsPerCapture} widths per import`, '1 import at a time', 'Bookmarklet + URL import'], free)}
+${plan('Pro', money($.pro.month) + '<span style="font-size:15px;font-weight:400;color:#666">/month</span>', 'one person', ['Unlimited imports', `${P.pro.widthsPerCapture} widths per import`, `${P.pro.concurrency} imports in parallel`, 'Fonts panel + pixel diff', 'Email support'], buy('pro', 'Get Pro')).replace('class="plan"', 'class="plan hot"')}
+${plan('Team', money($.team.month) + '<span style="font-size:15px;font-weight:400;color:#666">/month</span>', `up to ${P.team.keys} people`, ['Unlimited imports', `${P.team.widthsPerCapture} widths per import`, `${P.team.concurrency} imports in parallel`, `${P.team.keys} license keys, one bill`, 'Priority support'], buy('team', 'Get Team'))}
 </div></section>
 
 <section class="faq"><h2>Questions</h2>
 <h3>How close to the real page is it?</h3><p>Very, on most marketing and e-commerce pages — that's what the pixel diff is for. Heavily animated or canvas-drawn pages capture their current state as images. Sites that block automated browsers may need the bookmarklet.</p>
-<h3>What counts as a credit?</h3><p>One width of one page. Capturing a page at 1440 and 390 uses two credits. Failed captures are not charged.</p>
+<h3>What counts as an import?</h3><p>One page, however many widths you pick for it. Importing a page at 1440 and 390 is one import. Failed imports don't count. "Unlimited" has a fair-use ceiling (${P.pro.perDay} imports a day on Pro, ${P.team.perDay.toLocaleString('en-US')} on Team) that no designer reaches by hand — it exists to stop scrapers.</p>
 <h3>Do I need the site's fonts installed?</h3><p>Figma needs a font installed to render it. The plugin substitutes the closest match and lists what was missing; the Fonts panel lets you download the page's own font files (check their licence before use).</p>
 <h3>Where's my license key?</h3><p>It was shown once after checkout. Sign in at <a href="/account">/account</a> with your email to create a new one or revoke old ones — no password, we email you a link.</p>
 <h3>Can I cancel or change plans?</h3><p>Any time from your account page, via Stripe's billing portal. Downgrades apply at the end of the billing period; your key keeps working on the free tier.</p>

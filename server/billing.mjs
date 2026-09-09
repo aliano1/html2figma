@@ -16,8 +16,8 @@ import { PRODUCT } from './brand.mjs';
 import Stripe from 'stripe';
 
 export const PLAN_PRICES = {   // USD; edit here and re-run scripts/stripe-setup.mjs
-  pro: { name: PRODUCT + ' Pro', month: 1500, year: 14400, description: '300 captures a month, 4 widths per capture, 2 in parallel' },
-  team: { name: PRODUCT + ' Team', month: 4900, year: 47000, description: '1,500 captures a month, 4 widths per capture, 4 in parallel' },
+  pro: { name: PRODUCT + ' Pro', month: 1200, year: 9600, description: 'Unlimited imports for one person, 4 widths per import, 2 in parallel' },
+  team: { name: PRODUCT + ' Team', month: 3900, year: 39000, description: 'Unlimited imports for up to 10 people, 4 widths per import, 4 in parallel' },
 };
 
 export function planFromLookupKey(key) {

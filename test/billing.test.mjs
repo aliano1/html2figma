@@ -62,7 +62,7 @@ check(second.key === null && second.keyPrefix === first.key.slice(0, 13), 'a ref
 const keys = (await db.pool.query('select * from api_keys where account_id=$1', [acct.id])).rows;
 check(keys.length === 1 && keys[0].label === 'checkout ' + sid, 'exactly one key per checkout session');
 const quota = await db.quota((await db.pool.query("select * from accounts where email='jane@studio.com'")).rows[0]);
-check(quota.credits === 300 && quota.widthsPerCapture === 4, `pro limits apply (${quota.credits} credits)`);
+check(quota.unlimited && quota.widthsPerCapture === 4 && quota.keys === 3, `pro limits apply (unlimited imports, ${quota.keys} keys)`);
 
 // 4. success page first (webhook late) mints and shows the key exactly once
 const url2 = await billing.checkoutUrl(req, 'team', 'year', 'bob@agency.com'); const sid2 = url2.split('/').pop();

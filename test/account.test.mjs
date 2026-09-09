@@ -95,7 +95,7 @@ check(portalNoBilling.status === 404, 'portal without Stripe configured → 404 
 
 // 6. landing page + free sign-up
 const landing = await fetch(S + '/'); const landingHtml = await landing.text();
-check(landing.status === 200 && /<h1>Any web page/.test(landingHtml) && /\$15/.test(landingHtml) && /\$49/.test(landingHtml) && /10 credits a month/.test(landingHtml), 'landing page served at / with prices from billing.mjs and limits from db.mjs');
+check(landing.status === 200 && /<h1>Any web page/.test(landingHtml) && /\$12/.test(landingHtml) && /\$39/.test(landingHtml) && /5 imports a month/.test(landingHtml) && /Unlimited imports/.test(landingHtml), 'landing page served at / with prices from billing.mjs and limits from db.mjs');
 check(/action="\/account\/signup"/.test(landingHtml) && /Checkout not enabled/.test(landingHtml), 'free sign-up form present; buy buttons hidden without Stripe');
 check(/coming soon/.test(landingHtml), 'plugin install shows "coming soon" until H2F_PLUGIN_URL is set');
 const su = await form('/account/signup', { email: 'newbie@free.tier' });
@@ -106,7 +106,7 @@ const suAgain = await form('/account/signup', { email: 'newbie@free.tier' });
 check(suAgain.status === 200 && (await db.pool.query("select count(*)::int as n from accounts where email='newbie@free.tier'")).rows[0].n === 1, 'signing up twice is just a sign-in link, not a second account');
 check((await form('/account/signup', { email: 'nope' })).status === 400, 'malformed sign-up email refused');
 const terms = await (await fetch(S + '/terms')).text(); const privacy = await (await fetch(S + '/privacy')).text();
-check(/Terms of Service/.test(terms) && /300/.test(terms) && /Privacy Policy/.test(privacy) && /Stripe/.test(privacy), '/terms and /privacy served, terms carry the real plan limits');
+check(/Terms of Service/.test(terms) && /200 imports per day/.test(terms) && /Privacy Policy/.test(privacy) && /Stripe/.test(privacy), '/terms and /privacy served, terms carry the real plan limits');
 check(/href="\/terms"/.test(landingHtml) && /href="\/privacy"/.test(landingHtml), 'landing footer links to terms and privacy');
 const install = await fetch(S + '/install');
 check(install.status === 200 && /bookmarklet/i.test(await install.text()), '/install serves the bookmarklet page');

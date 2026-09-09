@@ -9,7 +9,7 @@
  *   POST /diff      { reference: dataURL, candidate: dataURL, cell? } → { similarity, diff: dataURL, regions: [{x,y,w,h,pct}] }
  *   GET  /healthz   → { ok, region, browser, features }
  *
- *   GET  /me        → { email, plan, credits, used, remaining, resetsAt } (license-key users)
+ *   GET  /me        → { email, plan, imports, unlimited, used, remaining, perDay, usedToday, resetsAt } (license-key users)
  *
  * Auth: `Authorization: Bearer …`. Single-tenant: the shared H2F_API_KEY. Multi-tenant (DATABASE_URL
  * set): per-user license keys `h2f_live_…` with plans, monthly credits and a Postgres job queue — see
@@ -326,7 +326,7 @@ async function workerTick() {
     if (!captures) { await db.remove(job.id); return; }   // cancelled by the user
     const result = { url: req.opts.url, title: captures[0].capture.title, region: REGION, ms: Date.now() - t0, captures };
     await db.finish(job.id, result);
-    await db.recordUsage({ accountId: job.account_id, keyHash: job.key_hash, url: req.opts.url, widths: req.widths, credits: req.widths.length, ms: Date.now() - t0, status: 'done', region: REGION });
+    await db.recordUsage({ accountId: job.account_id, keyHash: job.key_hash, url: req.opts.url, widths: req.widths, credits: 1, ms: Date.now() - t0, status: 'done', region: REGION });
   } catch (e) {
     console.error('capture failed', req.opts.url, e);
     await db.fail(job.id, friendly(e)).catch(() => {});
@@ -413,7 +413,7 @@ const server = http.createServer(async (req, res) => {
 
     // ---- GET /me: plan + credits for the plugin panel ----
     if (req.method === 'GET' && req.url === '/me') {
-      if (auth.kind !== 'user') return json(res, 200, { plan: auth.kind, credits: null, used: 0, remaining: null });
+      if (auth.kind !== 'user') return json(res, 200, { plan: auth.kind, imports: null, credits: null, used: 0, remaining: null });
       return json(res, 200, { email: auth.account.email, ...(await db.quota(auth.account)) });
     }
 
@@ -466,12 +466,13 @@ const server = http.createServer(async (req, res) => {
       // plan limits: widths per capture, monthly credits, concurrent jobs, burst rate
       const q = await db.quota(auth.account);
       if (widths.length > q.widthsPerCapture) return json(res, 400, { error: `your plan allows ${q.widthsPerCapture} width${q.widthsPerCapture === 1 ? '' : 's'} per capture` });
-      if (q.remaining < widths.length) return json(res, 402, { error: `not enough credits: ${q.remaining} left this month, ${widths.length} needed (resets ${q.resetsAt.slice(0, 10)})`, quota: q });
+      if (q.remaining < 1) return json(res, 402, { error: `monthly limit reached: the ${q.plan} plan includes ${q.imports} imports a month (resets ${q.resetsAt.slice(0, 10)}) — upgrade at ${accounts.base(req)}/#pricing`, quota: q });
+      if (q.usedToday >= q.perDay) return json(res, 429, { error: `fair-use limit: ${q.perDay} imports a day on the ${q.plan} plan — try again tomorrow`, quota: q });
       if ((await db.activeJobs(auth.account.id)) >= q.concurrency) return json(res, 429, { error: 'a capture is already running on your account — wait for it to finish' });
       if ((await db.recentRequests(auth.keyHash, 60)) >= 10) return json(res, 429, { error: 'too many captures per minute' });
       const id = newJobId();
       await db.enqueue({ id, accountId: auth.account.id, keyHash: auth.keyHash, request: { opts, widths } });
-      if (body.async) return json(res, 202, { jobId: id, poll: `/jobs/${id}`, quota: { ...q, remaining: q.remaining - widths.length } });
+      if (body.async) return json(res, 202, { jobId: id, poll: `/jobs/${id}`, quota: { ...q, used: q.used + 1, remaining: Math.max(0, q.remaining - 1) } });
       // sync callers: wait for the worker
       for (let i = 0; i < 600; i++) {
         await new Promise(r => setTimeout(r, 500));
