@@ -4,6 +4,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import Stripe from 'stripe';
 import pg from 'pg';
+import { PRODUCT } from '../server/brand.mjs';
 import { Billing, planFromLookupKey } from '../server/billing.mjs';
 import { Db } from '../server/db.mjs';
 
@@ -107,7 +108,7 @@ for (let i = 0; i < 40; i++) { try { const h = await fetch('http://127.0.0.1:812
 const health = await (await fetch('http://127.0.0.1:8125/healthz')).json();
 check(health.features.includes('billing'), 'server advertises billing');
 const welcome = await fetch('http://127.0.0.1:8125/welcome');
-check(welcome.status === 200 && /html2figma/.test(await welcome.text()), '/welcome page served without auth');
+check(welcome.status === 200 && new RegExp(PRODUCT).test(await welcome.text()), '/welcome page served without auth');
 const hook = await fetch('http://127.0.0.1:8125/stripe/webhook', { method: 'POST', body: '{}', headers: { 'stripe-signature': 'nope' } });
 check(hook.status === 400, `webhook with a bad signature → 400`);
 const openPortal = await fetch('http://127.0.0.1:8125/portal?email=jane@studio.com', { redirect: 'manual' });

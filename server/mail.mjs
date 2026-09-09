@@ -3,21 +3,24 @@
  *
  * Uses Resend's HTTP API (https://resend.com — no SDK needed, free tier covers a small product):
  *   RESEND_API_KEY   re_…
- *   H2F_MAIL_FROM    "html2figma <hello@yourdomain.com>"  — a sender on a domain you verified in Resend
+ *   H2F_MAIL_FROM    "htmlimport <hello@mail.yourdomain.com>"  — a sender on a domain you verified in Resend
  *
  * Without RESEND_API_KEY nothing is sent: the message is logged instead, so the account page still
  * works in development (the sign-in link shows up in the server log).
  */
+import { PRODUCT } from './brand.mjs';
+
 export class Mailer {
-  constructor({ apiKey = process.env.RESEND_API_KEY, from = process.env.H2F_MAIL_FROM || 'html2figma <onboarding@resend.dev>', fetchImpl = globalThis.fetch, log = console } = {}) {
-    this.apiKey = apiKey; this.from = from; this.fetch = fetchImpl; this.log = log;
+  constructor({ apiKey = process.env.RESEND_API_KEY, from = process.env.H2F_MAIL_FROM || `${PRODUCT} <onboarding@resend.dev>`, replyTo = process.env.H2F_MAIL_REPLY_TO || process.env.H2F_SUPPORT_EMAIL || null, fetchImpl = globalThis.fetch, log = console } = {}) {
+    this.apiKey = apiKey; this.from = from; this.replyTo = replyTo; this.fetch = fetchImpl; this.log = log;
     this.sent = [];   // last few sends, for tests and the dev log
   }
   get configured() { return !!this.apiKey; }
 
   /** @returns {Promise<{ delivered: boolean, id?: string }>} */
   async send({ to, subject, text, html }) {
-    const msg = { from: this.from, to: [to], subject, text, html: html || `<pre style="font:15px/1.5 system-ui,sans-serif;white-space:pre-wrap">${escapeHtml(text)}</pre>` };
+    // the sending subdomain has no inbox, so replies go to the support address when one is configured
+    const msg = { from: this.from, to: [to], subject, text, html: html || `<pre style="font:15px/1.5 system-ui,sans-serif;white-space:pre-wrap">${escapeHtml(text)}</pre>`, ...(this.replyTo ? { reply_to: this.replyTo } : {}) };
     this.sent.push({ to, subject, text, at: Date.now() }); if (this.sent.length > 50) this.sent.shift();
     if (!this.apiKey) { this.log.log(`[mail not configured] to ${to} — ${subject}\n${text}`); return { delivered: false }; }
     const r = await this.fetch('https://api.resend.com/emails', { method: 'POST', headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify(msg) });

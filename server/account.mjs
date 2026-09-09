@@ -10,6 +10,7 @@
  * Tokens are HMAC-signed `{ email, exp }` blobs (H2F_SECRET, or derived from the other secrets), so a
  * link proves control of the mailbox without any server-side session state. Multi-replica safe.
  */
+import { PRODUCT } from './brand.mjs';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { page } from './billing.mjs';
 import { escapeHtml as esc } from './mail.mjs';
@@ -17,7 +18,7 @@ import { escapeHtml as esc } from './mail.mjs';
 const b64u = b => Buffer.from(b).toString('base64url');
 
 export class Accounts {
-  constructor({ db, mailer, secret, billing = null, publicUrl = null, linkTtlMs = 30 * 60e3, productName = 'html2figma' }) {
+  constructor({ db, mailer, secret, billing = null, publicUrl = null, linkTtlMs = 30 * 60e3, productName = PRODUCT }) {
     if (!secret) throw new Error('Accounts needs a secret');
     this.db = db; this.mailer = mailer; this.secret = secret; this.billing = billing; this.publicUrl = publicUrl;
     this.linkTtlMs = linkTtlMs; this.productName = productName;

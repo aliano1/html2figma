@@ -12,11 +12,12 @@
  * Plans are matched by the price's lookup_key `h2f_<plan>_<month|year>` — created by scripts/stripe-setup.mjs.
  * Works identically against a sandbox (sk_test_…) and live keys.
  */
+import { PRODUCT } from './brand.mjs';
 import Stripe from 'stripe';
 
 export const PLAN_PRICES = {   // USD; edit here and re-run scripts/stripe-setup.mjs
-  pro: { name: 'html2figma Pro', month: 1500, year: 14400, description: '300 captures a month, 4 widths per capture, 2 in parallel' },
-  team: { name: 'html2figma Team', month: 4900, year: 47000, description: '1,500 captures a month, 4 widths per capture, 4 in parallel' },
+  pro: { name: PRODUCT + ' Pro', month: 1500, year: 14400, description: '300 captures a month, 4 widths per capture, 2 in parallel' },
+  team: { name: PRODUCT + ' Team', month: 4900, year: 47000, description: '1,500 captures a month, 4 widths per capture, 4 in parallel' },
 };
 
 export function planFromLookupKey(key) {
@@ -175,7 +176,7 @@ export function welcomePage(r) {
   if (!r) return page('Payment pending', `<h1>Almost there</h1><p>Your payment is still being confirmed. Refresh this page in a few seconds.</p>`);
   const manage = `<p class="muted">Keys, usage, invoices and cancellation live on your <a href="/account?email=${encodeURIComponent(r.account.email)}">account page</a> — we email you a sign-in link, no password.</p>`;
   if (r.key) return page('Your license key', `<h1>Thanks — you're on ${esc(r.account.plan)}</h1>
-<p>This is your license key. It is shown <b>once</b>; copy it now and paste it into the html2figma plugin (From URL → License key).</p>
+<p>This is your license key. It is shown <b>once</b>; copy it now and paste it into the ${esc(PRODUCT)} plugin (From URL → License key).</p>
 <code>${esc(r.key)}</code>
 ${manage}`);
   if (!r.keyPrefix) return page('Payment received', `<h1>Payment received</h1><p>Your account is on ${esc(r.account.plan)}. Refresh this page to get your license key.</p>`);

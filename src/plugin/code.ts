@@ -124,7 +124,7 @@ figma.ui.onmessage = async (msg: any) => {
       await figma.clientStorage.setAsync('h2f.settings', msg.settings || {});
     } else if (msg.type === 'build') {
       const cap: Capture = typeof msg.capture === 'string' ? JSON.parse(msg.capture) : msg.capture;
-      if (!cap || cap.v !== 1 || !cap.tree) throw new Error('Not an html2figma capture (expected {v:1, tree}).');
+      if (!cap || cap.v !== 1 || !cap.tree) throw new Error('Not an htmlimport capture (expected {v:1, tree}).');
       await buildCaptures([cap], msg);
     } else if (msg.type === 'captureUrl') {
       const { server, apiKey, url, widths, region } = msg;

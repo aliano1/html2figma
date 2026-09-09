@@ -1,4 +1,4 @@
-# html2figma
+# htmlimport (repo: html2figma)
 
 Capture any rendered web page and rebuild it as fully editable Figma layers — the same idea as html.to.design, running entirely on your machine.
 
@@ -37,7 +37,7 @@ Deploy the server (DEPLOY.md), then in the plugin: **From URL** → Server setti
 ## Use — Bookmarklet
 
 1. Open the page you want. Set the viewport you want (resize the window, or use DevTools device mode for mobile).
-2. Click the **html2figma** bookmark → **Capture page**. It scrolls the page once to trigger lazy content, reads the DOM, inlines images, and reports the size.
+2. Click the **htmlimport** bookmark → **Capture page**. It scrolls the page once to trigger lazy content, reads the DOM, inlines images, and reports the size.
 3. **Copy JSON** (or **Download .json** for big pages).
 4. In Figma, run the plugin, paste (or open the file), **Build in Figma**. A ~800-layer product page builds in a few seconds and lands to the right of your existing content.
 

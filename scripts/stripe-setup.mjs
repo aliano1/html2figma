@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Creates the html2figma products and prices in your Stripe account (sandbox or live — whichever key you pass).
+ * Creates the product's Stripe products (name from server/brand.mjs) and prices in your Stripe account (sandbox or live — whichever key you pass).
  * Idempotent: prices are found by lookup_key (h2f_pro_month, h2f_pro_year, h2f_team_month, h2f_team_year).
  *
  *   STRIPE_SECRET_KEY=sk_test_… node scripts/stripe-setup.mjs [https://your-server]
@@ -22,6 +22,9 @@ for (const [plan, def] of Object.entries(PLAN_PRICES)) {
   if (!product) {
     product = await stripe.products.create({ name: def.name, description: def.description, metadata: { h2f_plan: plan } });
     console.log(`created product ${product.name} (${product.id})`);
+  } else if (product.name !== def.name || product.description !== def.description) {
+    product = await stripe.products.update(product.id, { name: def.name, description: def.description });
+    console.log(`renamed product → ${product.name} (${product.id})`);
   } else console.log(`product ${product.name} exists (${product.id})`);
   for (const interval of ['month', 'year']) {
     const lookup = `h2f_${plan}_${interval}`;

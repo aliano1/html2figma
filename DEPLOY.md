@@ -79,7 +79,7 @@ Email goes out through [Resend](https://resend.com) (free tier is plenty to star
 
 1. Resend → **Domains → Add domain**, add the DNS records it shows for a domain you own (a subdomain like `mail.yourdomain.com` is fine), wait for "Verified".
 2. Resend → **API keys → Create** (Sending access only). Railway variable `RESEND_API_KEY` = `re_…`.
-3. Railway variable `H2F_MAIL_FROM` = `html2figma <hello@mail.yourdomain.com>` (must be on the verified domain). Optional `H2F_SECRET` = any long random string used to sign the links (otherwise one is derived from your other secrets — set it explicitly before running more than one service that must agree).
+3. Railway variable `H2F_MAIL_FROM` = `htmlimport <hello@mail.yourdomain.com>` (must be on the verified domain). The sending subdomain has no inbox, so also set `H2F_SUPPORT_EMAIL` to an address you read — it becomes the Reply-To (override with `H2F_MAIL_REPLY_TO`) and appears on the landing page. Optional `H2F_SECRET` = any long random string used to sign the links (otherwise one is derived from your other secrets — set it explicitly before running more than one service that must agree).
 
 Until `RESEND_API_KEY` is set nothing is sent: links are printed in the server log instead, which is enough for development. `/healthz` lists `email` once mail is configured.
 
@@ -87,7 +87,7 @@ Until `RESEND_API_KEY` is set nothing is sent: links are printed in the server l
 
 In multi-tenant mode the server's root is a complete marketing page — what the product does, how it works, pricing (numbers come from `server/billing.mjs` and `server/db.mjs`, so they can't drift from what's charged and enforced), a **Start free** form that creates a Free account and emails the sign-in link (`POST /account/signup`, 10 per hour per IP), the Pro/Team checkout buttons, and a FAQ. `/install` serves the bookmarklet page from `dist/`. Point your domain at the service (Railway → Settings → Networking → Custom Domain) and set `H2F_PUBLIC_URL` to it.
 
-Optional variables: `H2F_PLUGIN_URL` (the Figma Community URL once the plugin is published — until then the hero says "coming soon"), `H2F_SUPPORT_EMAIL` (shown in the footer and FAQ).
+Optional variables: `H2F_PRODUCT_NAME` (the customer-facing name on every page, email and Stripe product — default `htmlimport`; re-run `stripe-setup.mjs` after changing it so the Stripe products are renamed), `H2F_PLUGIN_URL` (the Figma Community URL once the plugin is published — until then the hero says "coming soon"), `H2F_SUPPORT_EMAIL` (shown in the footer and FAQ).
 
 With a merchant-of-record setup (Stripe Managed Payments, when enabled on your account) tax is handled by Stripe; on a standard account add Stripe Tax to the Checkout Session (`automatic_tax: { enabled: true }` in `server/billing.mjs`) once you've registered where required.
 

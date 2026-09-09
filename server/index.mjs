@@ -33,6 +33,7 @@ import { Billing, welcomePage, page as htmlPage } from './billing.mjs';
 import { Mailer, escapeHtml } from './mail.mjs';
 import { Accounts } from './account.mjs';
 import { landingPage } from './landing.mjs';
+import { PRODUCT } from './brand.mjs';
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
@@ -394,7 +395,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method === 'GET' && u.pathname === '/welcome') {
         const sid = u.searchParams.get('session_id');
-        if (!sid) return html(200, htmlPage('html2figma', '<h1>html2figma</h1><p>Thanks for visiting. Keys, usage and billing are on your <a href="/account">account page</a>.</p>'));
+        if (!sid) return html(200, htmlPage(PRODUCT, `<h1>${PRODUCT}</h1><p>Thanks for visiting. Keys, usage and billing are on your <a href="/account">account page</a>.</p>`));
         try { const session = await billing.stripe.checkout.sessions.retrieve(sid, { expand: ['subscription'] }); return html(200, welcomePage(await billing.fulfil(session))); }
         catch (e) { console.error('welcome failed', e); return html(400, htmlPage('Something went wrong', `<h1>Something went wrong</h1><p>${escapeHtml(e.message || e)}</p>`)); }
       }

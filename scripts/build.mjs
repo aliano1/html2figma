@@ -28,9 +28,9 @@ async function finish() {
   const js = readFileSync('dist/bookmarklet.js', 'utf8').trim();
   const href = 'javascript:' + encodeURIComponent(js);
   writeFileSync('dist/bookmarklet.txt', href);
-  writeFileSync('dist/install.html', `<!doctype html><meta charset="utf-8"><title>html2figma bookmarklet</title>
+  writeFileSync('dist/install.html', `<!doctype html><meta charset="utf-8"><title>htmlimport bookmarklet</title>
 <body style="font:15px/1.6 system-ui;max-width:640px;margin:60px auto;padding:0 20px">
-<h1>html2figma</h1>
+<h1>htmlimport</h1>
 <p>Drag this button to your bookmarks bar:</p>
 <p><a href="${href.replace(/"/g, '&quot;')}" style="display:inline-block;background:#c8da2b;color:#111;padding:10px 16px;border-radius:8px;text-decoration:none;font-weight:600">📐 html2figma</a></p>
 <p>Then open any page, click the bookmark, press <b>Capture page</b>, and paste the result into the Figma plugin.</p>

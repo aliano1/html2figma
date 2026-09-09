@@ -1,5 +1,5 @@
 {
-  "name": "html2figma",
+  "name": "htmlimport",
   "id": "html2figma-dev",
   "api": "1.0.0",
   "main": "dist/code.js",

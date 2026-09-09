@@ -16,7 +16,7 @@ let fails = 0; const check = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m
 
 // fake transport: records what Resend would have received
 const posts = [];
-const mailer = new Mailer({ apiKey: 're_test', from: 'html2figma <hi@h2f.test>', fetchImpl: async (url, o) => { posts.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ id: 'em_' + posts.length }) }; } });
+const mailer = new Mailer({ apiKey: 're_test', from: 'html2figma <hi@h2f.test>', replyTo: 'support@h2f.test', fetchImpl: async (url, o) => { posts.push(JSON.parse(o.body)); return { ok: true, json: async () => ({ id: 'em_' + posts.length }) }; } });
 const fakeBilling = { portalUrl: async (req, email) => 'https://billing.stripe.test/' + email };
 const accounts = new Accounts({ db, mailer, secret: 'unit-secret', billing: fakeBilling, publicUrl: 'https://h2f.test' });
 const req = { headers: { host: 'h2f.test' } };
@@ -34,7 +34,7 @@ const unknown = await accounts.requestLink(req, 'nobody@x.com');
 check(unknown.ok && posts.length === 0, 'unknown email: ok, nothing sent (no enumeration)');
 check((await accounts.requestLink(req, 'not an email')).ok === false, 'malformed email refused');
 const known = await accounts.requestLink(req, ' Jane@Studio.com ');
-check(known.ok && posts.length === 1 && posts[0].to[0] === 'jane@studio.com' && posts[0].from === 'html2figma <hi@h2f.test>', 'known email gets a mail from the configured sender');
+check(known.ok && posts.length === 1 && posts[0].to[0] === 'jane@studio.com' && posts[0].from === 'html2figma <hi@h2f.test>' && posts[0].reply_to === 'support@h2f.test', 'known email gets a mail from the configured sender, replies to support');
 const link = /https:\/\/h2f\.test\/account\?token=([^\s]+)/.exec(posts[0].text);
 check(link && accounts.verify(decodeURIComponent(link[1])) === 'jane@studio.com', 'the mail carries a valid account link');
 await accounts.requestLink(req, 'jane@studio.com'); await accounts.requestLink(req, 'jane@studio.com'); await accounts.requestLink(req, 'jane@studio.com');

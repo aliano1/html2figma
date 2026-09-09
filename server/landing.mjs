@@ -5,13 +5,14 @@
  * Env: H2F_PLUGIN_URL     Figma Community URL once the plugin is published (until then: "coming soon")
  *      H2F_SUPPORT_EMAIL  shown in the footer and the FAQ
  */
+import { PRODUCT } from './brand.mjs';
 import { PLAN_PRICES } from './billing.mjs';
 import { PLANS } from './db.mjs';
 import { escapeHtml as esc } from './mail.mjs';
 
 const money = cents => (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: cents % 100 ? 2 : 0 });
 
-export function landingPage({ billing = false, signup = false, pluginUrl = '', supportEmail = '', productName = 'html2figma' } = {}) {
+export function landingPage({ billing = false, signup = false, pluginUrl = '', supportEmail = '', productName = PRODUCT } = {}) {
   const P = PLANS, $ = PLAN_PRICES;
   const plan = (name, price, sub, lines, cta) => `<div class="plan"><h3>${name}</h3><p class="price">${price}</p><p class="sub">${sub}</p><ul>${lines.map(l => `<li>${l}</li>`).join('')}</ul>${cta}</div>`;
   const buy = (p, label) => billing ? `<a class="btn" href="/buy/${p}">${label}</a><a class="alt" href="/buy/${p}?interval=year">or ${money($[p].year)}/year</a>` : `<span class="alt">Checkout not enabled on this server</span>`;
