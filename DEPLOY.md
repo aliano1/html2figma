@@ -87,6 +87,8 @@ Until `RESEND_API_KEY` is set nothing is sent: links are printed in the server l
 
 In multi-tenant mode the server's root is a complete marketing page — what the product does, how it works, pricing (numbers come from `server/billing.mjs` and `server/db.mjs`, so they can't drift from what's charged and enforced), a **Start free** form that creates a Free account and emails the sign-in link (`POST /account/signup`, 10 per hour per IP), the Pro/Team checkout buttons, and a FAQ. `/install` serves the bookmarklet page from `dist/`. Point your domain at the service (Railway → Settings → Networking → Custom Domain) and set `H2F_PUBLIC_URL` to it.
 
+`/terms` and `/privacy` are generated pages (`server/legal.mjs`); set `H2F_LEGAL_NAME` (the entity customers contract with) and `H2F_LEGAL_COUNTRY` (governing law; default Switzerland) once the business entity is decided, and have a lawyer read them before relying on them. Put the same two URLs into Stripe → Settings → Business → Public details.
+
 Optional variables: `H2F_PRODUCT_NAME` (the customer-facing name on every page, email and Stripe product — default `htmlimport`; re-run `stripe-setup.mjs` after changing it so the Stripe products are renamed), `H2F_PLUGIN_URL` (the Figma Community URL once the plugin is published — until then the hero says "coming soon"), `H2F_SUPPORT_EMAIL` (shown in the footer and FAQ).
 
 With a merchant-of-record setup (Stripe Managed Payments, when enabled on your account) tax is handled by Stripe; on a standard account add Stripe Tax to the Checkout Session (`automatic_tax: { enabled: true }` in `server/billing.mjs`) once you've registered where required.

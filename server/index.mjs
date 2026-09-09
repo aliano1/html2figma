@@ -33,6 +33,7 @@ import { Billing, welcomePage, page as htmlPage } from './billing.mjs';
 import { Mailer, escapeHtml } from './mail.mjs';
 import { Accounts } from './account.mjs';
 import { landingPage } from './landing.mjs';
+import { termsPage, privacyPage } from './legal.mjs';
 import { PRODUCT } from './brand.mjs';
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -377,6 +378,7 @@ const server = http.createServer(async (req, res) => {
         accounts.base(req);
         return html(200, landingPage({ billing: !!billing, signup: true, pluginUrl: process.env.H2F_PLUGIN_URL || '', supportEmail: process.env.H2F_SUPPORT_EMAIL || '' }), { 'cache-control': 'public, max-age=300' });
       }
+      if (req.method === 'GET' && (u.pathname === '/terms' || u.pathname === '/privacy')) return html(200, u.pathname === '/terms' ? termsPage() : privacyPage(), { 'cache-control': 'public, max-age=300' });
       if (req.method === 'GET' && u.pathname === '/install') {
         const f = join(__dirname, '..', 'dist', 'install.html');
         return existsSync(f) ? html(200, readFileSync(f, 'utf8'), { 'cache-control': 'public, max-age=300' }) : json(res, 404, { error: 'run npm run build' });

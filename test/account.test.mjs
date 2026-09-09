@@ -105,6 +105,9 @@ check(newbie && newbie.plan === 'free', 'sign-up created a free account');
 const suAgain = await form('/account/signup', { email: 'newbie@free.tier' });
 check(suAgain.status === 200 && (await db.pool.query("select count(*)::int as n from accounts where email='newbie@free.tier'")).rows[0].n === 1, 'signing up twice is just a sign-in link, not a second account');
 check((await form('/account/signup', { email: 'nope' })).status === 400, 'malformed sign-up email refused');
+const terms = await (await fetch(S + '/terms')).text(); const privacy = await (await fetch(S + '/privacy')).text();
+check(/Terms of Service/.test(terms) && /300/.test(terms) && /Privacy Policy/.test(privacy) && /Stripe/.test(privacy), '/terms and /privacy served, terms carry the real plan limits');
+check(/href="\/terms"/.test(landingHtml) && /href="\/privacy"/.test(landingHtml), 'landing footer links to terms and privacy');
 const install = await fetch(S + '/install');
 check(install.status === 200 && /bookmarklet/i.test(await install.text()), '/install serves the bookmarklet page');
 

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- htmlimport icon: a page becoming stacked layers -->
+  <rect width="128" height="128" rx="28" fill="#111111"/>
+  <!-- three layer plates, offset like a Figma layer stack -->
+  <rect x="26" y="70" width="60" height="32" rx="6" fill="#4B4B4B"/>
+  <rect x="34" y="52" width="60" height="32" rx="6" fill="#8C8C8C"/>
+  <rect x="42" y="34" width="60" height="32" rx="6" fill="#F4F2EC"/>
+  <!-- text lines on the top plate -->
+  <rect x="50" y="43" width="30" height="5" rx="2.5" fill="#111111"/>
+  <rect x="50" y="53" width="44" height="5" rx="2.5" fill="#111111" opacity=".45"/>
+</svg>

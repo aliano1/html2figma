@@ -7,7 +7,8 @@
   "editorType": ["figma"],
   "networkAccess": {
     "allowedDomains": ["*"],
-    "reasoning": "Fetches page images that could not be inlined by the bookmarklet (CORS-restricted CDNs)."
+    "devAllowedDomains": ["http://localhost:8080"],
+    "reasoning": "The plugin sends the URL the user enters to the htmlimport capture service (htmlimport.com) and loads the images referenced by the page being imported; those images live on the page's own domains, which cannot be known in advance."
   },
   "documentAccess": "dynamic-page"
 }

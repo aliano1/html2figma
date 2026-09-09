@@ -86,7 +86,7 @@
 <script>
   const $ = id => document.getElementById(id);
   const post = m => parent.postMessage({ pluginMessage: m }, '*');
-  const DEFAULT_SERVER = 'https://html2figma-production-c921.up.railway.app';   // the hosted service; a self-hosted URL overrides it
+  const DEFAULT_SERVER = 'https://htmlimport.com';   // the hosted service; a self-hosted URL overrides it
   const serverUrl = () => $('server').value.trim() || DEFAULT_SERVER;
   let capture = null;
 

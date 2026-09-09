@@ -103,7 +103,8 @@ export class Accounts {
 <p>Enter the email you used at checkout and we'll send a sign-in link — no password.</p>
 ${error ? `<p style="color:#b91c1c">${esc(error)}</p>` : ''}
 <form method="post" action="/account/link" style="display:flex;gap:8px;flex-wrap:wrap"><input name="email" type="email" required value="${esc(email)}" placeholder="you@studio.com" style="flex:1;min-width:220px;font:16px system-ui;padding:10px 12px;border:1px solid #ccc;border-radius:8px"><button class="btn" style="font:16px system-ui;background:#111;color:#fff;border:0;padding:10px 16px;border-radius:8px;cursor:pointer">Email me a link</button></form>
-<p class="muted">No account yet? <a href="/buy/pro">Get Pro</a> · <a href="/buy/team">Get Team</a></p>`);
+<p class="muted">No account yet? <a href="/#pricing">Start free</a> · <a href="/buy/pro">Get Pro</a> · <a href="/buy/team">Get Team</a></p>
+<p class="muted"><a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p>`);
   }
   accountPage({ account, quota, keys, token, newKey = null, notice = null }) {
     const t = encodeURIComponent(token);

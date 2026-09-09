@@ -96,7 +96,7 @@ ${plan('Team', money($.team.month) + '<span style="font-size:15px;font-weight:40
 ${supportEmail ? `<h3>Something else?</h3><p>Email <a href="mailto:${esc(supportEmail)}">${esc(supportEmail)}</a>.</p>` : ''}
 </section>
 
-<footer><span>© ${new Date().getFullYear()} ${esc(productName)}</span><span><a href="/account">Account</a> · <a href="#pricing">Pricing</a>${supportEmail ? ` · <a href="mailto:${esc(supportEmail)}">Support</a>` : ''}</span></footer>
+<footer><span>© ${new Date().getFullYear()} ${esc(productName)}</span><span><a href="/account">Account</a> · <a href="#pricing">Pricing</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a>${supportEmail ? ` · <a href="mailto:${esc(supportEmail)}">Support</a>` : ''}</span></footer>
 </div>
 </body></html>`;
 }
