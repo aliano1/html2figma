@@ -108,6 +108,8 @@ check((await form('/account/signup', { email: 'nope' })).status === 400, 'malfor
 const terms = await (await fetch(S + '/terms')).text(); const privacy = await (await fetch(S + '/privacy')).text();
 check(/Terms of Service/.test(terms) && /200 imports per day/.test(terms) && /Privacy Policy/.test(privacy) && /Stripe/.test(privacy), '/terms and /privacy served, terms carry the real plan limits');
 check(/href="\/terms"/.test(landingHtml) && /href="\/privacy"/.test(landingHtml), 'landing footer links to terms and privacy');
+const sec = await (await fetch(S + '/security')).text();
+check(/Reporting a vulnerability/.test(sec) && /SHA-256/.test(sec), '/security page served');
 const install = await fetch(S + '/install');
 check(install.status === 200 && /bookmarklet/i.test(await install.text()), '/install serves the bookmarklet page');
 

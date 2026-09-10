@@ -21,7 +21,7 @@ const cfg = () => ({
 });
 const contact = c => c.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : 'the support address on the website';
 const wrap = (title, c, body) => page(`${title} — ${PRODUCT}`, `<style>h2{font-size:18px;margin:26px 0 6px}p,li{color:#333}p.muted{font-size:14px}nav a{margin-right:14px}</style>
-<nav><a href="/">${esc(PRODUCT)}</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/account">Account</a></nav>
+<nav><a href="/">${esc(PRODUCT)}</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/security">Security</a><a href="/account">Account</a></nav>
 <h1>${esc(title)}</h1><p class="muted">Last updated ${esc(c.updated)} · ${esc(c.name)} · ${esc(c.country)}</p>
 ${body}`);
 
@@ -65,6 +65,26 @@ export function termsPage() {
 
 <h2>11. Changes to these terms</h2>
 <p>We may update these terms; material changes are announced by email or on the website at least 14 days before they take effect. Continued use after that means you accept them.</p>
+
+<p>Questions: ${contact(c)}.</p>`);
+}
+
+export function securityPage() {
+  const c = cfg();
+  return wrap('Security', c, `
+<p>How ${esc(PRODUCT)} handles security, and how to report a problem.</p>
+
+<h2>Reporting a vulnerability</h2>
+<p>Email ${contact(c)} with "security" in the subject. Include what you found, how to reproduce it and, if relevant, which account or URL was involved. You will get an acknowledgement within 3 business days and updates as we work on it. We ask that you give us a reasonable time to fix or mitigate the issue before disclosing it publicly, that you do not access or modify other people's data beyond what is needed to demonstrate the problem, and that you do not run automated scanning against the capture service (it is rate-limited and you will simply be blocked). We are happy to credit you when the issue is resolved, if you want that.</p>
+
+<h2>What the service holds</h2>
+<p>Account email addresses; license keys stored only as SHA-256 hashes; per-import usage records (URL, widths, timestamp, duration, status); Stripe customer and subscription identifiers. Captured page content and any image the plugin sends for the pixel diff exist on the server only for the minutes needed to process them and are then deleted. The service never receives card numbers (Stripe handles payment) and never stores content from your Figma files.</p>
+
+<h2>How it is protected</h2>
+<p>All traffic is over HTTPS. Secrets live in the hosting environment, never in the code. Sign-in links are signed, single-purpose and expire after 30 minutes. The capture browser refuses private-network and non-public addresses, including redirects into them, and each capture runs in a fresh browser context. Requests are rate-limited per key and per address. Dependencies are kept current and the code base is small enough to review in full.</p>
+
+<h2>Providers</h2>
+<p>Railway (hosting and database), Stripe (payments), Resend (transactional email), Cloudflare (DNS and email routing). Each publishes its own security and compliance information. ${esc(PRODUCT)} itself is not independently certified (no SOC 2 / ISO 27001 report).</p>
 
 <p>Questions: ${contact(c)}.</p>`);
 }
