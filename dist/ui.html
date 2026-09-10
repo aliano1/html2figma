@@ -49,6 +49,7 @@
   </select></div>
   <div class="row"><span>License key</span><input id="apikey" type="password" placeholder="h2f_live_…"><button id="checkKey" class="secondary" type="button" style="padding:6px 10px">Check</button></div>
   <div id="plan" class="row" hidden style="margin-top:4px;color:var(--figma-color-text-secondary)"></div>
+  <p id="keyHint" style="margin-top:4px;color:var(--figma-color-text-secondary)">No key yet? Get one free at <a href="https://htmlimport.com" target="_blank" rel="noopener" style="color:var(--figma-color-text-brand)">htmlimport.com</a> — 5 imports a month, no card.</p>
   <details><summary>Self-hosted server (advanced)</summary>
     <div class="row"><span>Server URL</span><input id="server" type="text" placeholder="leave empty for the hosted service"></div>
     <p style="margin-top:6px">Running your own capture server (see DEPLOY.md)? Put its URL here and use its H2F_API_KEY as the license key.</p>
@@ -164,7 +165,7 @@
     const widths = [...document.querySelectorAll('.w:checked')].map(c => +c.value);
     const custom = parseInt($('wcustom').value, 10); if (custom >= 320) widths.push(custom);
     if (!widths.length) { $('status').textContent = 'Pick at least one width.'; return; }
-    if (!$('apikey').value.trim()) { $('status').textContent = 'Enter your license key first.'; $('apikey').focus(); return; }
+    if (!$('apikey').value.trim()) { $('status').innerHTML = 'Enter your license key first — get a free one at <a href="https://htmlimport.com" target="_blank" rel="noopener" style="color:var(--figma-color-text-brand)">htmlimport.com</a>.'; $('apikey').focus(); return; }
     saveSettings();
     busy(true, 'Contacting server…');
     post({ type: 'captureUrl', server: serverUrl(), apiKey: $('apikey').value.trim(), url, widths, region: $('region').value, ...fontOpts() });

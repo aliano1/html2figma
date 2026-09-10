@@ -68,12 +68,21 @@ The plugin talks to your server (`htmlimport.com`) and, on the bookmarklet path,
 
 > The plugin sends the URL the user enters to the htmlimport capture service (htmlimport.com) and loads the images referenced by the page being imported; those images live on the page's own domains, which cannot be known in advance.
 
+## Publish from a product-owned Figma account, not a personal one
+
+The account that first publishes a plugin owns it forever (listings cannot be transferred), so publish from an account that belongs to the product:
+
+1. **Inbox for the domain.** Cloudflare → htmlimport.com → Email → Email Routing → create `hello@htmlimport.com` → forward to a mailbox you read → verify the destination. Cloudflare adds the root-domain MX records itself (Resend's records on `mail.htmlimport.com` are unaffected). Set `H2F_SUPPORT_EMAIL=hello@htmlimport.com` in Railway.
+2. **Figma account.** In a private window: figma.com → Sign up → *Continue with email* → `hello@htmlimport.com`, name `htmlimport`, unique password in a password manager, enable two-factor in Settings. Starter plan.
+3. **Community profile.** Settings → Profile → handle `htmlimport`, avatar `icon-512.png`, bio "Any web page, rebuilt as editable Figma layers. Real text, fonts and images at every breakpoint.", website `https://htmlimport.com`.
+4. **Desktop app.** Account menu → *Add account* → sign in as hello@htmlimport.com; switch to it, then Plugins → Development → Import plugin from manifest… → `manifest.json`. Publish from this account only — only the original publisher can update the plugin. Development can continue under any account; the repo is the source of truth.
+
 ## Publishing, step by step
 
 1. In the Figma desktop app, open any file → **Plugins → Development → Import plugin from manifest…** → pick `manifest.json` in the repo (you did this already for the dev copy; re-import after the rename so the dev copy is called htmlimport too).
 2. **Plugins → Development → htmlimport → Publish** (or right-click the plugin in the Development list → Publish).
 3. On first publish Figma **assigns the plugin id** and rewrites the `"id"` in `manifest.json` from `html2figma-dev` to a long number. Commit that change: `git add manifest.json && git commit -m "figma plugin id" && git push`. Never change it again — the id *is* the listing.
-4. Fill the form: name, tagline, description, icon, cover, category, tags, support contact; publish as yourself (a Team/Org publisher can be added later). Enable comments — questions from users are the cheapest feedback you'll get.
+4. Fill the form: name, tagline, description, icon, cover, category, tags, support contact; publish from the htmlimport account (see above — the publisher cannot be changed later). Enable comments — questions from users are the cheapest feedback you'll get.
 5. Network access: Figma reads `networkAccess` from the manifest and shows "Unrestricted"; confirm the reasoning.
 6. **Submit for review.** The listing shows "In review"; approval arrives by email, typically a few days. Common rejection reasons: a name that uses "Figma", a broken first-run experience (test the plugin with an empty license key — the panel must explain what to do, not just error), and network reasoning that's vague.
 7. When approved, copy the Community URL (`https://www.figma.com/community/plugin/<id>/htmlimport`) into Railway as `H2F_PLUGIN_URL` — the landing page's hero button switches from "coming soon" to "Install the Figma plugin".
